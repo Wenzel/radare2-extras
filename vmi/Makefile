@@ -1,12 +1,18 @@
-TARGETS = io_vmi.so
-CFLAGS = -fPIC
-LDFLAGS = -shared
+include vmi.mk
+include r2.mk
+
+CFLAGS+=$(R2_CFLAGS)
+LDFLAGS+=$(R2_LDFLAGS)
 
 
 all: $(TARGETS)
 
-%.so: %.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -c $^ -o $@
+%.$(SO_EXT): %.c
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
+
+install:
+	mkdir -p $(R2_USER_PLUGINS)
+	cp -f $(TARGETS) $(R2_USER_PLUGINS)
 
 clean:
 	rm -f $(TARGETS)
