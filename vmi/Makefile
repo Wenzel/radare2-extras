@@ -8,7 +8,7 @@ LDFLAGS+=$(R2_LDFLAGS)
 all: $(TARGETS)
 
 %.$(SO_EXT): %.c
-	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
 install:
 	mkdir -p $(R2_USER_PLUGINS)
