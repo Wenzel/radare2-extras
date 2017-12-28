@@ -52,13 +52,12 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
 
     // URI has the following format: vmi://vm_name:pid
     // parse URI
-
     uri_content = strdup(pathname + strlen(URI_PREFIX));
     // get vm_name
     char *token = strtok_r(uri_content, delimiter, &saveptr);
     if (!token)
     {
-        fprintf(stderr, "strtok_r: Parsing vm_name failed\n");
+        eprintf("strtok_r: Parsing vm_name failed\n");
         goto out;
     }
     rio_vmi->vm_name = strdup(token);
@@ -66,26 +65,23 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     token = strtok_r(NULL, delimiter, &saveptr);
     if (!token)
     {
-        fprintf(stderr, "strtok_r: Parsing pid failed\n");
+        eprintf("strtok_r: Parsing pid failed\n");
         goto out;
     }
     saveptr = NULL;
     pid = strtol(token, &saveptr, 10);
-    printf("pid: %d\n", pid);
-    printf("errno: %s\n", strerror(errno));
     if (!pid)
     {
-        fprintf(stderr, "strtol: Could not convert %s to int. (%s)\n", token, strerror(errno));
+        eprintf("strtol: Could not convert %s to int. (%s)\n", token, strerror(errno));
         goto out;
     }
     if (*saveptr != '\0')
     {
-        fprintf(stderr, "strtol: Could not entirelly convert %s to int, (%s)\n", token, saveptr);
+        eprintf("strtol: Could not entirely convert %s to int, (%s)\n", token, saveptr);
         goto out;
     }
     rio_vmi->pid = pid;
     printf("VM: %s, PID: %d\n", rio_vmi->vm_name, rio_vmi->pid);
-
 
     // init libvmi
     printf("Initializing LibVMI\n");
@@ -94,15 +90,15 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
                                         VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, &error);
     if (status == VMI_FAILURE)
     {
-        fprintf(stderr, "vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
+        eprintf("vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
         goto out;
     }
-
-    rio_vmi_destroy(rio_vmi);
 
     return r_io_desc_new (io, &r_io_plugin_vmi, pathname, flags, mode, rio_vmi);
 
 out:
+    if (uri_content)
+        free(uri_content);
     rio_vmi_destroy(rio_vmi);
     return ret;
 }
@@ -110,18 +106,21 @@ out:
 static int __close(RIODesc *fd) {
     RIOVmi *rio_vmi = NULL;
 
+    printf("%s\n", __func__);
     if (!fd || !fd->data)
         return -1;
 
     rio_vmi = fd->data;
     rio_vmi_destroy(rio_vmi);
+    return true;
 }
 
 static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
+    printf("%s, offset: %x\n", __func__, offset);
+
     if (!fd || !fd->data)
         return -1;
 
-    printf("%s\n", __func__);
     switch (whence) {
         case SEEK_SET:
             io->off = offset;
@@ -134,12 +133,33 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
             break;
     }
     return io->off;
-
 }
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int len) {
-    printf("%s\n", __func__);
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+    size_t bytes_read = 0;
+    access_context_t ctx;
 
+    printf("%s, offset: %x\n", __func__, io->off);
+
+    if (!fd || !fd->data)
+        return -1;
+
+    rio_vmi = fd->data;
+    // fill access context
+    ctx.translate_mechanism = VMI_TM_PROCESS_PID;
+    ctx.addr = io->off;
+    ctx.pid = rio_vmi->pid;
+    // read
+    status = vmi_read(rio_vmi->vmi, &ctx, len, (void*)buf, &bytes_read);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("read: vmi_failure\n");
+        return 0;
+    }
+
+    return bytes_read;
 }
 
 static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
@@ -147,9 +167,10 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
 
 }
 
-static int __system(RIO *io, RIODesc *fd, const char *command) {
+static char *__system(RIO *io, RIODesc *fd, const char *command) {
     printf("%s command: %s\n", __func__, command);
-
+    // io->cb_printf()
+    return NULL;
 }
 
 RIOPlugin r_io_plugin_vmi = {
