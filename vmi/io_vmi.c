@@ -116,7 +116,7 @@ static int __close(RIODesc *fd) {
 }
 
 static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
-    printf("%s, offset: %x\n", __func__, offset);
+    printf("%s, offset: %llx\n", __func__, offset);
 
     if (!fd || !fd->data)
         return -1;
@@ -141,7 +141,7 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int len) {
     size_t bytes_read = 0;
     access_context_t ctx;
 
-    printf("%s, offset: %x\n", __func__, io->off);
+    printf("%s, offset: %llx\n", __func__, io->off);
 
     if (!fd || !fd->data)
         return -1;
