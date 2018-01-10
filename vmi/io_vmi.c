@@ -167,6 +167,24 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
 
 }
 
+static int __getpid(RIODesc *fd) {
+    printf("%s\n", __func__);
+
+    RIOVmi *rio_vmi = NULL;
+
+    printf("%s\n", __func__);
+    if (!fd || !fd->data)
+        return -1;
+
+    rio_vmi = fd->data;
+    return rio_vmi->pid;
+}
+
+static int __gettid(RIODesc *fd) {
+    printf("%s\n", __func__);
+    return 0;
+}
+
 static char *__system(RIO *io, RIODesc *fd, const char *command) {
     printf("%s command: %s\n", __func__, command);
     // io->cb_printf()
@@ -183,6 +201,7 @@ RIOPlugin r_io_plugin_vmi = {
     .lseek = __lseek,
     .read = __read,
     .write = __write,
+    .getpid = __getpid,
     .system = __system,
     .isdbg = true,
 };
