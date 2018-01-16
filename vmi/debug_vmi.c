@@ -1,54 +1,60 @@
 #include <r_asm.h>
 #include <r_debug.h>
+#include <libvmi/libvmi.h>
+#include <libvmi/events.h>
 
-static int r_debug_vmi_step(RDebug *dbg) {
+#include "io_vmi.h"
+
+static int __step(RDebug *dbg) {
     printf("%s\n", __func__);
 
 }
 
 // "dc" continue execution
-static int r_debug_vmi_continue(RDebug *dbg, int pid, int tid, int sig) {
+static int __continue(RDebug *dbg, int pid, int tid, int sig) {
     printf("%s\n", __func__);
 
 }
 
-static int r_debug_vmi_attach(RDebug *dbg, int pid) {
+static int __attach(RDebug *dbg, int pid) {
     printf("%s\n", __func__);
 
 }
 
-static int r_debug_vmi_detach(RDebug *dbg, int pid) {
+static int __detach(RDebug *dbg, int pid) {
     printf("%s\n", __func__);
 
 }
 
-static RList* r_debug_vmi_threads(RDebug *dbg, int pid) {
+static RList* __threads(RDebug *dbg, int pid) {
     printf("%s\n", __func__);
 
 }
 
-static RDebugReasonType r_debug_vmi_wait(RDebug *dbg, int pid) {
+static RDebugReasonType __wait(RDebug *dbg, int pid) {
     printf("%s\n", __func__);
 
 }
 
-static RList *r_debug_vmi_map_get(RDebug* dbg) {
+static RList *__map_get(RDebug* dbg) {
     printf("%s\n", __func__);
 
 }
 
-static RList* r_debug_vmi_modules_get(RDebug *dbg) {
+static RList* __modules_get(RDebug *dbg) {
     printf("%s\n", __func__);
 
 }
 
-static int r_debug_vmi_breakpoint (void *bp, RBreakpointItem *b, bool set) {
+static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
     printf("%s\n", __func__);
+
+
 
 }
 
 // "drp" register profile
-static const char *r_debug_vmi_reg_profile(RDebug *dbg) {
+static const char *__reg_profile(RDebug *dbg) {
     printf("%s\n", __func__);
     int arch = r_sys_arch_id (dbg->arch);
     int bits = dbg->anal->bits;
@@ -167,28 +173,86 @@ static const char *r_debug_vmi_reg_profile(RDebug *dbg) {
 }
 
 // "dk" send kill signal
-static bool r_debug_vmi_kill(RDebug *dbg, int pid, int tid, int sig) {
+static bool __kill(RDebug *dbg, int pid, int tid, int sig) {
     printf("%s\n", __func__);
 
 }
 
-static int r_debug_vmi_select(int pid, int tid) {
+static int __select(int pid, int tid) {
     printf("%s\n", __func__);
 
 }
 
-static RDebugInfo* r_debug_vmi_info(RDebug *dbg, const char *arg) {
+static RDebugInfo* __info(RDebug *dbg, const char *arg) {
     printf("%s\n", __func__);
 
 }
 
-static RList* r_debug_vmi_frames(RDebug *dbg, ut64 at) {
+static RList* __frames(RDebug *dbg, ut64 at) {
     printf("%s\n", __func__);
 
 }
 
-static int r_debug_vmi_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+event_response_t my_callback(vmi_instance_t vmi, vmi_event_t *event){
+    printf("%s\n", __func__);
+
+    if(!event || event->type != VMI_EVENT_REGISTER) {
+        eprintf("ERROR (%s): invalid event encounted\n", __func__);
+        return;
+    }
+
+    reg_t cr3 = event->reg_event.value;
+    pid_t pid;
+    status_t status = vmi_dtb_to_pid(vmi, (addr_t) cr3, &pid);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("ERROR (%s): fail to retrieve pid from cr3\n", __func__);
+        return;
+    }
+    printf("pid: %d, cr3: %lx\n", pid, cr3);
+    return 0;
+}
+
+static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    bool interrupted;
+    status_t status = 0;
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 0;
+    }
+
     printf("%s, type: %d, size:%d\n", __func__, type, size);
+
+    vmi_pause_vm(rio_vmi->vmi);
+
+    vmi_event_t cr3_load_event = {0};
+    SETUP_REG_EVENT(&cr3_load_event, CR3, VMI_REGACCESS_W, 0, my_callback);
+
+    status = vmi_register_event(rio_vmi->vmi, &cr3_load_event);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("vmi event registration failure\n");
+        vmi_resume_vm(rio_vmi->vmi);
+        return 0;
+    }
+
+    vmi_resume_vm(rio_vmi->vmi);
+    while (!interrupted)
+    {
+        printf("Listening on VMI events...\n");
+        status = vmi_events_listen(rio_vmi->vmi, 500);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("listening on events failed\n");
+            interrupted = true;
+        }
+    }
 
     return 0;
 }
@@ -198,21 +262,21 @@ RDebugPlugin r_debug_plugin_vmi = {
     .license = "LGPL3",
     .arch = "x86",
     .bits = R_SYS_BITS_32 | R_SYS_BITS_64,
-    .step = &r_debug_vmi_step,
-    .cont = &r_debug_vmi_continue,
-    .attach = &r_debug_vmi_attach,
-    .detach = &r_debug_vmi_detach,
-    .threads = &r_debug_vmi_threads,
-    .wait = &r_debug_vmi_wait,
-    .map_get = &r_debug_vmi_map_get,
-    .modules_get = &r_debug_vmi_modules_get,
-    .breakpoint = &r_debug_vmi_breakpoint,
-    .reg_profile = (void*) &r_debug_vmi_reg_profile,
-    .kill = &r_debug_vmi_kill,
-    .info = &r_debug_vmi_info,
-    .select = &r_debug_vmi_select,
-    .frames = &r_debug_vmi_frames,
-    .reg_read = &r_debug_vmi_reg_read,
+    .step = &__step,
+    .cont = &__continue,
+    .attach = &__attach,
+    .detach = &__detach,
+    .threads = &__threads,
+    .wait = &__wait,
+    .map_get = &__map_get,
+    .modules_get = &__modules_get,
+    .breakpoint = &__breakpoint,
+    .reg_profile = (void*) &__reg_profile,
+    .kill = &__kill,
+    .info = &__info,
+    .select = &__select,
+    .frames = &__frames,
+    .reg_read = &__reg_read,
 };
 
 #ifndef CORELIB

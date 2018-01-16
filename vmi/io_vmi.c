@@ -5,15 +5,9 @@
 #include <stdlib.h>
 #include <errno.h>
 
-#include <libvmi/libvmi.h>
+#include "io_vmi.h"
 
 #define URI_PREFIX "vmi://"
-
-typedef struct {
-    char *vm_name;
-    int pid;
-    vmi_instance_t vmi;
-} RIOVmi;
 
 extern RIOPlugin r_io_plugin_vmi; // forward declaration
 
@@ -86,7 +80,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     // init libvmi
     printf("Initializing LibVMI\n");
     vmi_init_error_t error;
-    status_t status = vmi_init_complete(&(rio_vmi->vmi), rio_vmi->vm_name, VMI_INIT_DOMAINNAME, NULL,
+    status_t status = vmi_init_complete(&(rio_vmi->vmi), rio_vmi->vm_name, VMI_INIT_DOMAINNAME | VMI_INIT_EVENTS, NULL,
                                         VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, &error);
     if (status == VMI_FAILURE)
     {
