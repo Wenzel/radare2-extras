@@ -11,15 +11,29 @@
 
 extern RIOPlugin r_io_plugin_vmi; // forward declaration
 
+// r2 bug: plugins are initialized twice (call to __open)
+// we want to allocate or initialize our libraries (libvmi) only once
+static vmi_instance_t singleton_vmi_inst = NULL;
+
 static void rio_vmi_destroy(RIOVmi *ptr)
 {
+    printf("%s\n", __func__);
     if (ptr)
     {
         if (ptr->vm_name)
+        {
             free(ptr->vm_name);
-        if (ptr->vmi)
-            vmi_destroy(ptr->vmi);
+            ptr->vm_name = NULL;
+        }
+        // check singleton
+        if (singleton_vmi_inst)
+        {
+            vmi_destroy(singleton_vmi_inst);
+            singleton_vmi_inst = NULL;
+            ptr->vmi = NULL;
+        }
         free(ptr);
+        ptr = NULL;
     }
 }
 
@@ -77,17 +91,20 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     rio_vmi->pid = pid;
     printf("VM: %s, PID: %d\n", rio_vmi->vm_name, rio_vmi->pid);
 
-    // init libvmi
-    printf("Initializing LibVMI\n");
-    vmi_init_error_t error;
-    status_t status = vmi_init_complete(&(rio_vmi->vmi), rio_vmi->vm_name, VMI_INIT_DOMAINNAME | VMI_INIT_EVENTS, NULL,
-                                        VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, &error);
-    if (status == VMI_FAILURE)
+    if (!singleton_vmi_inst)
     {
-        eprintf("vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
-        goto out;
+        // init libvmi
+        printf("Initializing LibVMI\n");
+        vmi_init_error_t error;
+        status_t status = vmi_init_complete(&singleton_vmi_inst, rio_vmi->vm_name, VMI_INIT_DOMAINNAME | VMI_INIT_EVENTS, NULL,
+                                            VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, &error);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
+            goto out;
+        }
     }
-
+    rio_vmi->vmi = singleton_vmi_inst;
     return r_io_desc_new (io, &r_io_plugin_vmi, pathname, flags, mode, rio_vmi);
 
 out:
@@ -116,15 +133,15 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
         return -1;
 
     switch (whence) {
-        case SEEK_SET:
-            io->off = offset;
-            break;
-        case SEEK_CUR:
-            io->off += (int)offset;
-            break;
-        case SEEK_END:
-            io->off = UT64_MAX;
-            break;
+    case SEEK_SET:
+        io->off = offset;
+        break;
+    case SEEK_CUR:
+        io->off += (int)offset;
+        break;
+    case SEEK_END:
+        io->off = UT64_MAX;
+        break;
     }
     return io->off;
 }

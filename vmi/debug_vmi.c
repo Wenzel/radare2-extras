@@ -198,7 +198,7 @@ event_response_t my_callback(vmi_instance_t vmi, vmi_event_t *event){
 
     if(!event || event->type != VMI_EVENT_REGISTER) {
         eprintf("ERROR (%s): invalid event encounted\n", __func__);
-        return;
+        return 0;
     }
 
     reg_t cr3 = event->reg_event.value;
@@ -207,7 +207,7 @@ event_response_t my_callback(vmi_instance_t vmi, vmi_event_t *event){
     if (status == VMI_FAILURE)
     {
         eprintf("ERROR (%s): fail to retrieve pid from cr3\n", __func__);
-        return;
+        return 0;
     }
     printf("pid: %d, cr3: %lx\n", pid, cr3);
     return 0;
@@ -226,33 +226,32 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
         eprintf("%s: Invalid RIOVmi\n", __func__);
         return 0;
     }
-
     printf("%s, type: %d, size:%d\n", __func__, type, size);
 
     vmi_pause_vm(rio_vmi->vmi);
 
-    vmi_event_t cr3_load_event = {0};
-    SETUP_REG_EVENT(&cr3_load_event, CR3, VMI_REGACCESS_W, 0, my_callback);
+//    vmi_event_t cr3_load_event = {0};
+//    SETUP_REG_EVENT(&cr3_load_event, CR3, VMI_REGACCESS_W, 0, my_callback);
 
-    status = vmi_register_event(rio_vmi->vmi, &cr3_load_event);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("vmi event registration failure\n");
-        vmi_resume_vm(rio_vmi->vmi);
-        return 0;
-    }
+//    status = vmi_register_event(rio_vmi->vmi, &cr3_load_event);
+//    if (status == VMI_FAILURE)
+//    {
+//        eprintf("vmi event registration failure\n");
+//        vmi_resume_vm(rio_vmi->vmi);
+//        return 0;
+//    }
 
     vmi_resume_vm(rio_vmi->vmi);
-    while (!interrupted)
-    {
-        printf("Listening on VMI events...\n");
-        status = vmi_events_listen(rio_vmi->vmi, 500);
-        if (status == VMI_FAILURE)
-        {
-            eprintf("listening on events failed\n");
-            interrupted = true;
-        }
-    }
+//    while (!interrupted)
+//    {
+//        printf("Listening on VMI events...\n");
+//        status = vmi_events_listen(rio_vmi->vmi, 500);
+//        if (status == VMI_FAILURE)
+//        {
+//            eprintf("listening on events failed\n");
+//            interrupted = true;
+//        }
+//    }
 
     return 0;
 }
