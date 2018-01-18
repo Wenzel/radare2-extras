@@ -5,6 +5,17 @@
 
 #include "io_vmi.h"
 
+// vmi_events_listen loop
+static bool interrupted = false;
+
+typedef struct {
+    pid_t pid;
+    registers_t regs;
+    status_t status;
+} cr3_load_event_data_t;
+
+
+
 static int __step(RDebug *dbg) {
     printf("%s\n", __func__);
 
@@ -16,8 +27,108 @@ static int __continue(RDebug *dbg, int pid, int tid, int sig) {
 
 }
 
-static int __attach(RDebug *dbg, int pid) {
+event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     printf("%s\n", __func__);
+
+    if(!event || event->type != VMI_EVENT_REGISTER || !event->data) {
+        eprintf("ERROR (%s): invalid event encounted\n", __func__);
+        return 0;
+    }
+
+    // get event data
+    cr3_load_event_data_t event_data = *(cr3_load_event_data_t*)(event->data);
+
+    reg_t cr3 = event->reg_event.value;
+    pid_t pid;
+    status_t status = vmi_dtb_to_pid(vmi, (addr_t) cr3, &pid);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("ERROR (%s): fail to retrieve pid from cr3\n", __func__);
+        return 0;
+    }
+
+    printf("pid: %d, cr3: %lx, target pid: %d\n", pid, cr3, event_data.pid);
+    // check if it's our pid
+    if (pid == event_data.pid)
+    {
+        // stop monitoring
+        interrupted = true;
+        status = vmi_clear_event(vmi, event, NULL);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to clear event\n");
+            exit(1);
+        }
+    }
+
+    return 0;
+}
+
+static int __attach(RDebug *dbg, int pid) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status = 0;
+
+    printf("Attaching to pid %d...\n", pid);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 0;
+    }
+
+    status = vmi_pause_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to pause VM\n");
+        return 1;
+    }
+
+    vmi_event_t cr3_load_event = {0};
+    SETUP_REG_EVENT(&cr3_load_event, CR3, VMI_REGACCESS_W, 0, cb_on_cr3_load);
+
+    // preparing event data
+    cr3_load_event_data_t event_data = {0};
+    event_data.pid = rio_vmi->pid;
+
+    // add it to cr3_load_event
+    cr3_load_event.data = (void*)&event_data;
+
+    status = vmi_register_event(rio_vmi->vmi, &cr3_load_event);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("vmi event registration failure\n");
+        vmi_resume_vm(rio_vmi->vmi);
+        return 0;
+    }
+
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to resume VM\n");
+        return 1;
+    }
+    while (!interrupted)
+    {
+        printf("Listening on VMI events...\n");
+        status = vmi_events_listen(rio_vmi->vmi, 1000);
+        if (status == VMI_FAILURE)
+        {
+            interrupted = true;
+        }
+    }
+
+    // pause vm
+    status = vmi_pause_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to pause VM\n");
+        return 1;
+    }
+
+    return 0;
 
 }
 
@@ -193,31 +304,15 @@ static RList* __frames(RDebug *dbg, ut64 at) {
 
 }
 
-event_response_t my_callback(vmi_instance_t vmi, vmi_event_t *event){
-    printf("%s\n", __func__);
 
-    if(!event || event->type != VMI_EVENT_REGISTER) {
-        eprintf("ERROR (%s): invalid event encounted\n", __func__);
-        return 0;
-    }
-
-    reg_t cr3 = event->reg_event.value;
-    pid_t pid;
-    status_t status = vmi_dtb_to_pid(vmi, (addr_t) cr3, &pid);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("ERROR (%s): fail to retrieve pid from cr3\n", __func__);
-        return 0;
-    }
-    printf("pid: %d, cr3: %lx\n", pid, cr3);
-    return 0;
-}
 
 static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
-    bool interrupted;
     status_t status = 0;
+
+
+    printf("%s, type: %d, size:%d\n", __func__, type, size);
 
     desc = dbg->iob.io->desc;
     rio_vmi = desc->data;
@@ -226,32 +321,47 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
         eprintf("%s: Invalid RIOVmi\n", __func__);
         return 0;
     }
-    printf("%s, type: %d, size:%d\n", __func__, type, size);
+    unsigned int nb_vcpus = vmi_get_num_vcpus(rio_vmi->vmi);
 
-    vmi_pause_vm(rio_vmi->vmi);
+    registers_t regs;
+    uint64_t cr3 = 0;
+    pid_t pid;
+    bool found = false;
+    for (int vcpu = 0; vcpu < nb_vcpus; vcpu++)
+    {
+        // get cr3
+        status = vmi_get_vcpureg(rio_vmi->vmi, &cr3, CR3, vcpu);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to get vcpu registers\n");
+            return 1;
+        }
+        // convert to pid
+        status = vmi_dtb_to_pid(rio_vmi->vmi, cr3, &pid);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to convert CR3 to PID\n");
+            return 1;
+        }
+        if (pid == rio_vmi->pid)
+        {
+            found = true;
+            // get registers
 
-//    vmi_event_t cr3_load_event = {0};
-//    SETUP_REG_EVENT(&cr3_load_event, CR3, VMI_REGACCESS_W, 0, my_callback);
-
-//    status = vmi_register_event(rio_vmi->vmi, &cr3_load_event);
-//    if (status == VMI_FAILURE)
-//    {
-//        eprintf("vmi event registration failure\n");
-//        vmi_resume_vm(rio_vmi->vmi);
-//        return 0;
-//    }
-
-    vmi_resume_vm(rio_vmi->vmi);
-//    while (!interrupted)
-//    {
-//        printf("Listening on VMI events...\n");
-//        status = vmi_events_listen(rio_vmi->vmi, 500);
-//        if (status == VMI_FAILURE)
-//        {
-//            eprintf("listening on events failed\n");
-//            interrupted = true;
-//        }
-//    }
+            status = vmi_get_vcpuregs(rio_vmi->vmi, &regs, vcpu);
+            if (status == VMI_FAILURE)
+            {
+                eprintf("Fail to get vcpu registers\n");
+                return 1;
+            }
+            break;
+        }
+    }
+    if (!found)
+    {
+        eprintf("Cannot find CR3 !\n");
+        return 1;
+    }
 
     return 0;
 }
