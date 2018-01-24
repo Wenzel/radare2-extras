@@ -76,7 +76,7 @@ static int __attach(RDebug *dbg, int pid) {
     if (!rio_vmi)
     {
         eprintf("%s: Invalid RIOVmi\n", __func__);
-        return 0;
+        return 1;
     }
 
     status = vmi_pause_vm(rio_vmi->vmi);
@@ -285,8 +285,26 @@ static const char *__reg_profile(RDebug *dbg) {
 
 // "dk" send kill signal
 static bool __kill(RDebug *dbg, int pid, int tid, int sig) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
     printf("%s\n", __func__);
 
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return false;
+    }
+
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to resume VM\n");
+        return false;
+    }
+    return true;
 }
 
 static int __select(int pid, int tid) {
@@ -304,8 +322,6 @@ static RList* __frames(RDebug *dbg, ut64 at) {
 
 }
 
-
-
 static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
@@ -319,7 +335,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     if (!rio_vmi)
     {
         eprintf("%s: Invalid RIOVmi\n", __func__);
-        return 0;
+        return 1;
     }
     unsigned int nb_vcpus = vmi_get_num_vcpus(rio_vmi->vmi);
 
@@ -346,8 +362,8 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
         if (pid == rio_vmi->pid)
         {
             found = true;
-            // get registers
 
+            // get registers
             status = vmi_get_vcpuregs(rio_vmi->vmi, &regs, vcpu);
             if (status == VMI_FAILURE)
             {
@@ -362,6 +378,30 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
         eprintf("Cannot find CR3 !\n");
         return 1;
     }
+
+    int arch = r_sys_arch_id (dbg->arch);
+    int bits = dbg->anal->bits;
+
+    switch (arch) {
+        case R_SYS_ARCH_X86:
+            switch (bits) {
+                case 32:
+                    eprintf("Bits not supported\n");
+                    return 1;
+                case 64:
+                    memcpy(buf      , &(regs.x86.rax), sizeof(regs.x86.rax));
+                    memcpy(buf + 8  , &(regs.x86.rbx), sizeof(regs.x86.rbx));
+                    memcpy(buf + 16 , &(regs.x86.rcx), sizeof(regs.x86.rcx));
+                    memcpy(buf + 24 , &(regs.x86.rdx), sizeof(regs.x86.rdx));
+                    memcpy(buf + 128, &(regs.x86.rip), sizeof(regs.x86.rip));
+                    break;
+            }
+            break;
+        default:
+            eprintf("Architecture not supported\n");
+            return 1;
+    }
+    printf("rip buf[128] %lx\n", *(uint64_t*)(buf + 128));
 
     return 0;
 }
