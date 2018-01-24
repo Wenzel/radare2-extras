@@ -196,12 +196,11 @@ static const char *__reg_profile(RDebug *dbg) {
 
 }
 
-// "dk" send kill signal
+// "dk" send signal
 static bool __kill(RDebug *dbg, int pid, int tid, int sig) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
-    status_t status;
-    printf("%s\n", __func__);
+    printf("%s, sig: %d\n", __func__, sig);
 
     desc = dbg->iob.io->desc;
     rio_vmi = desc->data;
@@ -211,12 +210,8 @@ static bool __kill(RDebug *dbg, int pid, int tid, int sig) {
         return false;
     }
 
-//    status = vmi_resume_vm(rio_vmi->vmi);
-//    if (status == VMI_FAILURE)
-//    {
-//        eprintf("Fail to resume VM\n");
-//        return false;
-//    }
+    if (sig < 0 || sig > 31)
+        return false;
     return true;
 }
 
