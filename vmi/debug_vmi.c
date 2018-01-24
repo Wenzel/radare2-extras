@@ -326,6 +326,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
     status_t status = 0;
+    int buf_size = 0;
 
 
     printf("%s, type: %d, size:%d\n", __func__, type, size);
@@ -401,9 +402,10 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
             eprintf("Architecture not supported\n");
             return 1;
     }
-    printf("rip buf[128] %lx\n", *(uint64_t*)(buf + 128));
+    printf("rip buf[128] %p\n", *(uint64_t*)(buf + 128));
+    buf_size = 128 + sizeof(uint64_t);
 
-    return 0;
+    return buf_size;
 }
 
 RDebugPlugin r_debug_plugin_vmi = {
