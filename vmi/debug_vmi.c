@@ -307,6 +307,10 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
                     memcpy(buf + 8  , &(regs.x86.rbx), sizeof(regs.x86.rbx));
                     memcpy(buf + 16 , &(regs.x86.rcx), sizeof(regs.x86.rcx));
                     memcpy(buf + 24 , &(regs.x86.rdx), sizeof(regs.x86.rdx));
+                    memcpy(buf + 32 , &(regs.x86.rsi), sizeof(regs.x86.rsi));
+                    memcpy(buf + 40 , &(regs.x86.rdi), sizeof(regs.x86.rdi));
+                    memcpy(buf + 48 , &(regs.x86.rbp), sizeof(regs.x86.rbp));
+                    memcpy(buf + 56 , &(regs.x86.rsp), sizeof(regs.x86.rsp));
                     memcpy(buf + 128, &(regs.x86.rip), sizeof(regs.x86.rip));
                     break;
             }
