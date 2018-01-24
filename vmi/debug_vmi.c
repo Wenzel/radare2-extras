@@ -242,7 +242,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     int buf_size = 0;
 
 
-    printf("%s, type: %d, size:%d\n", __func__, type, size);
+    // printf("%s, type: %d, size:%d\n", __func__, type, size);
 
     desc = dbg->iob.io->desc;
     rio_vmi = desc->data;
@@ -319,7 +319,6 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
             eprintf("Architecture not supported\n");
             return 1;
     }
-    printf("rip buf[128] %p\n", *(uint64_t*)(buf + 128));
     buf_size = 128 + sizeof(uint64_t);
 
     return buf_size;
