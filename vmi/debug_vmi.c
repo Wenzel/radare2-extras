@@ -298,12 +298,12 @@ static bool __kill(RDebug *dbg, int pid, int tid, int sig) {
         return false;
     }
 
-    status = vmi_resume_vm(rio_vmi->vmi);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to resume VM\n");
-        return false;
-    }
+//    status = vmi_resume_vm(rio_vmi->vmi);
+//    if (status == VMI_FAILURE)
+//    {
+//        eprintf("Fail to resume VM\n");
+//        return false;
+//    }
     return true;
 }
 

@@ -28,6 +28,12 @@ static void rio_vmi_destroy(RIOVmi *ptr)
         // check singleton
         if (singleton_vmi_inst)
         {
+            status_t status;
+            status = vmi_resume_vm(singleton_vmi_inst);
+            if (status == VMI_FAILURE)
+            {
+                eprintf("Fail to resume VM\n");
+            }
             vmi_destroy(singleton_vmi_inst);
             singleton_vmi_inst = NULL;
             ptr->vmi = NULL;
