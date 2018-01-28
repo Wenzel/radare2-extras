@@ -15,16 +15,29 @@ typedef struct {
 } cr3_load_event_data_t;
 
 
-
-static int __step(RDebug *dbg) {
-    printf("%s\n", __func__);
-
-}
-
 // "dc" continue execution
 static int __continue(RDebug *dbg, int pid, int tid, int sig) {
-    printf("%s\n", __func__);
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
 
+    printf("%s, sig: %d\n", __func__, sig);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 1;
+    }
+
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status = VMI_FAILURE)
+    {
+        eprintf("Failed to resume VM execution\n");
+        return 1;
+    }
+    return 0;
 }
 
 event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
@@ -143,7 +156,18 @@ static RList* __threads(RDebug *dbg, int pid) {
 }
 
 static RDebugReasonType __wait(RDebug *dbg, int pid) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status = 0;
     printf("%s\n", __func__);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 1;
+    }
 
 }
 
@@ -158,10 +182,20 @@ static RList* __modules_get(RDebug *dbg) {
 }
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
-    printf("%s\n", __func__);
+    printf("%s, set: %d\n", __func__, set);
+
+    if (!bp)
+        return false;
 
 
+    if (set)
+    {
 
+    } else {
+
+    }
+
+    return true;
 }
 
 // "drp" register profile
@@ -324,7 +358,6 @@ RDebugPlugin r_debug_plugin_vmi = {
     .license = "LGPL3",
     .arch = "x86",
     .bits = R_SYS_BITS_32 | R_SYS_BITS_64,
-    .step = &__step,
     .cont = &__continue,
     .attach = &__attach,
     .detach = &__detach,
