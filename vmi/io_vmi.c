@@ -64,6 +64,8 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     if (!rio_vmi)
         goto out;
 
+    rio_vmi->current_vcpu = -1;
+    rio_vmi->attached = false;
     // URI has the following format: vmi://vm_name:pid
     // parse URI
     uri_content = strdup(pathname + strlen(URI_PREFIX));
@@ -133,7 +135,7 @@ static int __close(RIODesc *fd) {
 }
 
 static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
-    // printf("%s, offset: %llx\n", __func__, offset);
+    // printf("%s, offset: %llx, io->off: %llx\n", __func__, offset, io->off);
 
     if (!fd || !fd->data)
         return -1;
@@ -158,7 +160,7 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int len) {
     size_t bytes_read = 0;
     access_context_t ctx;
 
-    // printf("%s, offset: %llx\n", __func__, io->off);
+    printf("%s, offset: %llx\n", __func__, io->off);
 
     if (!fd || !fd->data)
         return -1;
@@ -172,7 +174,7 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int len) {
     status = vmi_read(rio_vmi->vmi, &ctx, len, (void*)buf, &bytes_read);
     if (status == VMI_FAILURE)
     {
-        eprintf("read: vmi_failure\n");
+        eprintf("read %p: vmi_failure\n", (void*)io->off);
         return 0;
     }
 

@@ -12,7 +12,82 @@ typedef struct {
     pid_t pid;
     registers_t regs;
     status_t status;
+    RIOVmi *rio_vmi;
 } cr3_load_event_data_t;
+
+event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
+    status_t status;
+
+    printf("%s\n", __func__);
+
+    // clear event
+    status = vmi_clear_event(vmi, event, NULL);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to clear event\n");
+        return false;
+    }
+
+    // stop monitoring
+    interrupted = true;
+    return 0;
+}
+
+static int __step(RDebug *dbg) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+
+    printf("%s\n", __func__);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 1;
+    }
+
+
+
+    vmi_event_t sstep_event = {0};
+    sstep_event.version = VMI_EVENTS_VERSION;
+    sstep_event.type = VMI_EVENT_SINGLESTEP;
+    sstep_event.callback = cb_on_sstep;
+    sstep_event.ss_event.enable = 1;
+    SET_VCPU_SINGLESTEP(sstep_event.ss_event, rio_vmi->current_vcpu);
+    vmi_register_event(rio_vmi->vmi, &sstep_event);
+    interrupted = false;
+
+    // resume vm
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to resume VM\n");
+        return false;
+    }
+
+    while (!interrupted) {
+        printf("Listen to VMI events\n");
+        status = vmi_events_listen(rio_vmi->vmi, 1000);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to listen to events\n");
+            return false;
+        }
+        printf("Listening done\n");
+    }
+
+    // pause vm again
+    status = vmi_pause_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to pause VM\n");
+        return false;
+    }
+
+    return true;
+}
 
 
 // "dc" continue execution
@@ -31,12 +106,28 @@ static int __continue(RDebug *dbg, int pid, int tid, int sig) {
         return 1;
     }
 
+    /*
+    // register event for int3
+    vmi_event_t *int3_event = calloc(1, sizeof(vmi_event_t));
+    SETUP_REG_EVENT(&int3_event, CR3, VMI_REGACCESS_W, 0, cb_on_cr3_load);
+
+    // preparing event data
+    cr3_load_event_data_t event_data = {0};
+    event_data.pid = rio_vmi->pid;
+
+    // add it to cr3_load_event
+    int3_event.data = (void*)&event_data;
+
+    status = vmi_register_event(rio_vmi->vmi, &int3_event);
+
     status = vmi_resume_vm(rio_vmi->vmi);
     if (status = VMI_FAILURE)
     {
         eprintf("Failed to resume VM execution\n");
         return 1;
     }
+    */
+
     return 0;
 }
 
@@ -60,18 +151,15 @@ event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
         return 0;
     }
 
-    printf("pid: %d, cr3: %lx, target pid: %d\n", pid, cr3, event_data.pid);
+    printf("pid: %d, cr3: %lx\n", pid, cr3);
     // check if it's our pid
     if (pid == event_data.pid)
     {
         // stop monitoring
         interrupted = true;
-        status = vmi_clear_event(vmi, event, NULL);
-        if (status == VMI_FAILURE)
-        {
-            eprintf("Fail to clear event\n");
-            exit(1);
-        }
+        // set current VCPU
+        printf("current VCPU: %d\n", event->vcpu_id);
+        event_data.rio_vmi->current_vcpu = event->vcpu_id;
     }
 
     return 0;
@@ -105,6 +193,7 @@ static int __attach(RDebug *dbg, int pid) {
     // preparing event data
     cr3_load_event_data_t event_data = {0};
     event_data.pid = rio_vmi->pid;
+    event_data.rio_vmi = rio_vmi;
 
     // add it to cr3_load_event
     cr3_load_event.data = (void*)&event_data;
@@ -114,7 +203,7 @@ static int __attach(RDebug *dbg, int pid) {
     {
         eprintf("vmi event registration failure\n");
         vmi_resume_vm(rio_vmi->vmi);
-        return 0;
+        return 1;
     }
 
     status = vmi_resume_vm(rio_vmi->vmi);
@@ -123,6 +212,7 @@ static int __attach(RDebug *dbg, int pid) {
         eprintf("Fail to resume VM\n");
         return 1;
     }
+
     while (!interrupted)
     {
         printf("Listening on VMI events...\n");
@@ -130,16 +220,35 @@ static int __attach(RDebug *dbg, int pid) {
         if (status == VMI_FAILURE)
         {
             interrupted = true;
+            return 1;
         }
     }
 
-    // pause vm
+    uint64_t cr3;
+    status = vmi_get_vcpureg(rio_vmi->vmi, &cr3, CR3, 0);
+
+    status = vmi_dtb_to_pid(rio_vmi->vmi, cr3, &pid);
+    printf("attached to pid:%d\n", pid);
+
+    // make sure vm is paused before clearing the event
+    // clearing the event would resume the vm
     status = vmi_pause_vm(rio_vmi->vmi);
     if (status == VMI_FAILURE)
     {
         eprintf("Fail to pause VM\n");
         return 1;
     }
+
+    status = vmi_clear_event(rio_vmi->vmi, &cr3_load_event, NULL);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to clear event\n");
+        exit(1);
+    }
+
+
+    // set attached to allow reg_read
+    rio_vmi->attached = true;
 
     return 0;
 
@@ -158,7 +267,6 @@ static RList* __threads(RDebug *dbg, int pid) {
 static RDebugReasonType __wait(RDebug *dbg, int pid) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
-    status_t status = 0;
     printf("%s\n", __func__);
 
     desc = dbg->iob.io->desc;
@@ -182,7 +290,7 @@ static RList* __modules_get(RDebug *dbg) {
 }
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
-    printf("%s, set: %d\n", __func__, set);
+    printf("%s, set: %d, addr: %p, hw: %d\n", __func__, set, b->addr, b->hw);
 
     if (!bp)
         return false;
@@ -270,8 +378,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     status_t status = 0;
     int buf_size = 0;
 
-
-    // printf("%s, type: %d, size:%d\n", __func__, type, size);
+    printf("%s, type: %d, size:%d\n", __func__, type, size);
 
     desc = dbg->iob.io->desc;
     rio_vmi = desc->data;
@@ -280,6 +387,10 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
         eprintf("%s: Invalid RIOVmi\n", __func__);
         return 1;
     }
+
+    if (!rio_vmi->attached)
+        return 0;
+
     unsigned int nb_vcpus = vmi_get_num_vcpus(rio_vmi->vmi);
 
     registers_t regs;
@@ -302,6 +413,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
             eprintf("Fail to convert CR3 to PID\n");
             return 1;
         }
+        printf("dtb to pid: %d\n", pid);
         if (pid == rio_vmi->pid)
         {
             found = true;
@@ -319,8 +431,14 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     if (!found)
     {
         eprintf("Cannot find CR3 !\n");
+        vmi_resume_vm(rio_vmi->vmi);
+        vmi_destroy(rio_vmi->vmi);
+        exit(1);
         return 1;
     }
+    vmi_resume_vm(rio_vmi->vmi);
+    vmi_destroy(rio_vmi->vmi);
+    exit(0);
 
     int arch = r_sys_arch_id (dbg->arch);
     int bits = dbg->anal->bits;
@@ -349,6 +467,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
             return 1;
     }
     buf_size = 128 + sizeof(uint64_t);
+    printf("RIP: %p\n", regs.x86.rip);
 
     return buf_size;
 }
@@ -358,6 +477,8 @@ RDebugPlugin r_debug_plugin_vmi = {
     .license = "LGPL3",
     .arch = "x86",
     .bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+    .canstep = 1,
+    .step = &__step,
     .cont = &__continue,
     .attach = &__attach,
     .detach = &__detach,

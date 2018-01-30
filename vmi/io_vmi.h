@@ -6,7 +6,9 @@
 typedef struct {
     char *vm_name;
     int pid;
+    int current_vcpu;
     vmi_instance_t vmi;
+    bool attached;
 } RIOVmi;
 
 #endif // IO_VMI_H
