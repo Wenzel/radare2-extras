@@ -11,10 +11,6 @@
 
 extern RIOPlugin r_io_plugin_vmi; // forward declaration
 
-// r2 bug: plugins are initialized twice (call to __open)
-// we want to allocate or initialize our libraries (libvmi) only once
-static vmi_instance_t singleton_vmi_inst = NULL;
-
 static void rio_vmi_destroy(RIOVmi *ptr)
 {
     printf("%s\n", __func__);
@@ -25,17 +21,17 @@ static void rio_vmi_destroy(RIOVmi *ptr)
             free(ptr->vm_name);
             ptr->vm_name = NULL;
         }
-        // check singleton
-        if (singleton_vmi_inst)
+        if (ptr->vmi)
         {
             status_t status;
-            status = vmi_resume_vm(singleton_vmi_inst);
+            // TODO dev
+            // this resume VM should be done somewhere else
+            status = vmi_resume_vm(ptr->vmi);
             if (status == VMI_FAILURE)
             {
                 eprintf("Fail to resume VM\n");
             }
-            vmi_destroy(singleton_vmi_inst);
-            singleton_vmi_inst = NULL;
+            vmi_destroy(ptr->vmi);
             ptr->vmi = NULL;
         }
         free(ptr);
@@ -99,20 +95,16 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     rio_vmi->pid = pid;
     printf("VM: %s, PID: %d\n", rio_vmi->vm_name, rio_vmi->pid);
 
-    if (!singleton_vmi_inst)
+    // init libvmi
+    printf("Initializing LibVMI\n");
+    vmi_init_error_t error;
+    status_t status = vmi_init_complete(&rio_vmi->vmi, rio_vmi->vm_name, VMI_INIT_DOMAINNAME | VMI_INIT_EVENTS, NULL,
+                                        VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, &error);
+    if (status == VMI_FAILURE)
     {
-        // init libvmi
-        printf("Initializing LibVMI\n");
-        vmi_init_error_t error;
-        status_t status = vmi_init_complete(&singleton_vmi_inst, rio_vmi->vm_name, VMI_INIT_DOMAINNAME | VMI_INIT_EVENTS, NULL,
-                                            VMI_CONFIG_GLOBAL_FILE_ENTRY, NULL, &error);
-        if (status == VMI_FAILURE)
-        {
-            eprintf("vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
-            goto out;
-        }
+        eprintf("vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
+        goto out;
     }
-    rio_vmi->vmi = singleton_vmi_inst;
     return r_io_desc_new (io, &r_io_plugin_vmi, pathname, flags, mode, rio_vmi);
 
 out:
