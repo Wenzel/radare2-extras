@@ -284,11 +284,13 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
 static RList *__map_get(RDebug* dbg) {
     printf("%s\n", __func__);
 
+    return NULL;
 }
 
 static RList* __modules_get(RDebug *dbg) {
     printf("%s\n", __func__);
 
+    return NULL;
 }
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
