@@ -38,53 +38,17 @@ static int __step(RDebug *dbg) {
         return 1;
     }
 
-    vmi_event_t sstep_event = {0};
-    sstep_event.version = VMI_EVENTS_VERSION;
-    sstep_event.type = VMI_EVENT_SINGLESTEP;
-    sstep_event.callback = cb_on_sstep;
-    sstep_event.ss_event.enable = 1;
-    SET_VCPU_SINGLESTEP(sstep_event.ss_event, rio_vmi->current_vcpu);
-    vmi_register_event(rio_vmi->vmi, &sstep_event);
-    interrupted = false;
-
-    // resume vm
-    status = vmi_resume_vm(rio_vmi->vmi);
+    rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
+    // memset(&rio_vmi->wait_event, 0, sizeof(vmi_event_t));
+    rio_vmi->wait_event->version = VMI_EVENTS_VERSION;
+    rio_vmi->wait_event->type = VMI_EVENT_SINGLESTEP;
+    rio_vmi->wait_event->callback = cb_on_sstep;
+    rio_vmi->wait_event->ss_event.enable = 1;
+    SET_VCPU_SINGLESTEP(rio_vmi->wait_event->ss_event, rio_vmi->current_vcpu);
+    status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
     if (status == VMI_FAILURE)
     {
-        eprintf("Fail to resume VM\n");
-        return false;
-    }
-
-    // wait until we have an event
-    while (!vmi_are_events_pending(rio_vmi->vmi))
-    {
-        usleep(1000);
-    }
-
-    // pause vm again
-    status = vmi_pause_vm(rio_vmi->vmi);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to pause VM\n");
-        return false;
-    }
-
-    while (!interrupted) {
-        printf("Listen to VMI events\n");
-        status = vmi_events_listen(rio_vmi->vmi, 1000);
-        if (status == VMI_FAILURE)
-        {
-            eprintf("Fail to listen to events\n");
-            return false;
-        }
-        printf("Listening done\n");
-    }
-
-    // clear event
-    status = vmi_clear_event(rio_vmi->vmi, &sstep_event, NULL);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to clear event\n");
+        eprintf("Failed to register event\n");
         return false;
     }
 
@@ -269,6 +233,7 @@ static RList* __threads(RDebug *dbg, int pid) {
 static RDebugReasonType __wait(RDebug *dbg, int pid) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
+    status_t status;
     printf("%s\n", __func__);
 
     desc = dbg->iob.io->desc;
@@ -279,6 +244,50 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
         return 1;
     }
 
+    // resume vm
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to resume VM\n");
+        return false;
+    }
+
+    // wait until we have an event
+    while (!vmi_are_events_pending(rio_vmi->vmi))
+    {
+        usleep(1000);
+    }
+
+    // pause vm again
+    status = vmi_pause_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to pause VM\n");
+        return false;
+    }
+
+    interrupted = false;
+    while (!interrupted) {
+        printf("Listen to VMI events\n");
+        status = vmi_events_listen(rio_vmi->vmi, 1000);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to listen to events\n");
+            return false;
+        }
+        printf("Listening done\n");
+    }
+
+    // clear event
+    status = vmi_clear_event(rio_vmi->vmi, rio_vmi->wait_event, NULL);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to clear event\n");
+        return false;
+    }
+    free(rio_vmi->wait_event);
+
+    return 0;
 }
 
 static RList *__map_get(RDebug* dbg) {
