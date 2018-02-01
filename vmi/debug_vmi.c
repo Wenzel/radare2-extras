@@ -16,17 +16,7 @@ typedef struct {
 } cr3_load_event_data_t;
 
 event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
-    status_t status;
-
     printf("%s\n", __func__);
-
-    // clear event
-    status = vmi_clear_event(vmi, event, NULL);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to clear event\n");
-        return false;
-    }
 
     // stop monitoring
     interrupted = true;
@@ -48,8 +38,6 @@ static int __step(RDebug *dbg) {
         return 1;
     }
 
-
-
     vmi_event_t sstep_event = {0};
     sstep_event.version = VMI_EVENTS_VERSION;
     sstep_event.type = VMI_EVENT_SINGLESTEP;
@@ -67,6 +55,20 @@ static int __step(RDebug *dbg) {
         return false;
     }
 
+    // wait until we have an event
+    while (!vmi_are_events_pending(rio_vmi->vmi))
+    {
+        usleep(1000);
+    }
+
+    // pause vm again
+    status = vmi_pause_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to pause VM\n");
+        return false;
+    }
+
     while (!interrupted) {
         printf("Listen to VMI events\n");
         status = vmi_events_listen(rio_vmi->vmi, 1000);
@@ -78,11 +80,11 @@ static int __step(RDebug *dbg) {
         printf("Listening done\n");
     }
 
-    // pause vm again
-    status = vmi_pause_vm(rio_vmi->vmi);
+    // clear event
+    status = vmi_clear_event(rio_vmi->vmi, &sstep_event, NULL);
     if (status == VMI_FAILURE)
     {
-        eprintf("Fail to pause VM\n");
+        eprintf("Fail to clear event\n");
         return false;
     }
 
@@ -431,14 +433,8 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     if (!found)
     {
         eprintf("Cannot find CR3 !\n");
-        vmi_resume_vm(rio_vmi->vmi);
-        vmi_destroy(rio_vmi->vmi);
-        exit(1);
         return 1;
     }
-    vmi_resume_vm(rio_vmi->vmi);
-    vmi_destroy(rio_vmi->vmi);
-    exit(0);
 
     int arch = r_sys_arch_id (dbg->arch);
     int bits = dbg->anal->bits;
@@ -467,7 +463,7 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
             return 1;
     }
     buf_size = 128 + sizeof(uint64_t);
-    printf("RIP: %p\n", regs.x86.rip);
+    // printf("RIP: %p\n", regs.x86.rip);
 
     return buf_size;
 }
