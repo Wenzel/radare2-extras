@@ -10,6 +10,8 @@ What works:
 - Read the registers
 - Single-step the process execution
 
+Demo: https://asciinema.org/a/Vm2eXMSOS8faegNQGlH4C9J0u
+
 # Requirements
 
 - `Xen 4.6`
