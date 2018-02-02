@@ -3,8 +3,15 @@
 This plugins allow you to debug remote process running in a VM.
 It uses `Libvmi` to read and write the process virtual address space.
 
+What works:
+- Intercept a process by PID
+- Read the registers
+- Single-step the process execution
+
 # Requirements
 
+- `Xen 4.6`
+- [`libvmi`](http://libvmi.com/)
 - `radare2`
 - `pkg-config`
 
@@ -19,6 +26,11 @@ Note: if `pkgconfig` fails, you need to:
 
 # Usage
 
-    $ r2 vmi://win7:5344
+You need a virtual machine configured on top of `Xen`, and a process to intercept using its `PID`.
 
+    $ r2 vmi://<vm_name>:<pid>
+
+Example:
+
+    $ r2 vmi://win7:5344
 
