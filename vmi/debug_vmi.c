@@ -15,7 +15,10 @@ typedef struct {
     RIOVmi *rio_vmi;
 } cr3_load_event_data_t;
 
-event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
+//
+// callbacks
+//
+static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
     printf("%s\n", __func__);
 
     // stop monitoring
@@ -23,81 +26,7 @@ event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
     return 0;
 }
 
-static int __step(RDebug *dbg) {
-    RIODesc *desc = NULL;
-    RIOVmi *rio_vmi = NULL;
-    status_t status;
-
-    printf("%s\n", __func__);
-
-    desc = dbg->iob.io->desc;
-    rio_vmi = desc->data;
-    if (!rio_vmi)
-    {
-        eprintf("%s: Invalid RIOVmi\n", __func__);
-        return 1;
-    }
-
-    rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
-    // memset(&rio_vmi->wait_event, 0, sizeof(vmi_event_t));
-    rio_vmi->wait_event->version = VMI_EVENTS_VERSION;
-    rio_vmi->wait_event->type = VMI_EVENT_SINGLESTEP;
-    rio_vmi->wait_event->callback = cb_on_sstep;
-    rio_vmi->wait_event->ss_event.enable = 1;
-    SET_VCPU_SINGLESTEP(rio_vmi->wait_event->ss_event, rio_vmi->current_vcpu);
-    status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Failed to register event\n");
-        return false;
-    }
-
-    return true;
-}
-
-
-// "dc" continue execution
-static int __continue(RDebug *dbg, int pid, int tid, int sig) {
-    RIODesc *desc = NULL;
-    RIOVmi *rio_vmi = NULL;
-    status_t status;
-
-    printf("%s, sig: %d\n", __func__, sig);
-
-    desc = dbg->iob.io->desc;
-    rio_vmi = desc->data;
-    if (!rio_vmi)
-    {
-        eprintf("%s: Invalid RIOVmi\n", __func__);
-        return 1;
-    }
-
-    /*
-    // register event for int3
-    vmi_event_t *int3_event = calloc(1, sizeof(vmi_event_t));
-    SETUP_REG_EVENT(&int3_event, CR3, VMI_REGACCESS_W, 0, cb_on_cr3_load);
-
-    // preparing event data
-    cr3_load_event_data_t event_data = {0};
-    event_data.pid = rio_vmi->pid;
-
-    // add it to cr3_load_event
-    int3_event.data = (void*)&event_data;
-
-    status = vmi_register_event(rio_vmi->vmi, &int3_event);
-
-    status = vmi_resume_vm(rio_vmi->vmi);
-    if (status = VMI_FAILURE)
-    {
-        eprintf("Failed to resume VM execution\n");
-        return 1;
-    }
-    */
-
-    return 0;
-}
-
-event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
+static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     printf("%s\n", __func__);
 
     if(!event || event->type != VMI_EVENT_REGISTER || !event->data) {
@@ -126,6 +55,92 @@ event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
         // set current VCPU
         printf("current VCPU: %d\n", event->vcpu_id);
         event_data.rio_vmi->current_vcpu = event->vcpu_id;
+    }
+
+    return 0;
+}
+
+static event_response_t cb_on_int3(vmi_instance_t vmi, vmi_event_t *event){
+    printf("%s\n", __func__);
+
+    return 0;
+}
+
+
+//
+// R2 debug interface
+//
+static int __step(RDebug *dbg) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+
+    printf("%s\n", __func__);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 1;
+    }
+
+    rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
+    rio_vmi->wait_event->version = VMI_EVENTS_VERSION;
+    rio_vmi->wait_event->type = VMI_EVENT_SINGLESTEP;
+    rio_vmi->wait_event->callback = cb_on_sstep;
+    rio_vmi->wait_event->ss_event.enable = 1;
+    SET_VCPU_SINGLESTEP(rio_vmi->wait_event->ss_event, rio_vmi->current_vcpu);
+    status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Failed to register event\n");
+        return false;
+    }
+
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Failed to resume VM execution\n");
+        return 1;
+    }
+
+    return true;
+}
+
+
+// "dc" continue execution
+static int __continue(RDebug *dbg, int pid, int tid, int sig) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+
+    printf("%s, sig: %d\n", __func__, sig);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return 1;
+    }
+
+    // register event for int3
+    rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
+    SETUP_INTERRUPT_EVENT(rio_vmi->wait_event, 0, cb_on_int3);
+
+    status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to register event\n");
+        return 1;
+    }
+
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Failed to resume VM execution\n");
+        return 1;
     }
 
     return 0;
@@ -244,14 +259,6 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
         return 1;
     }
 
-    // resume vm
-    status = vmi_resume_vm(rio_vmi->vmi);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to resume VM\n");
-        return false;
-    }
-
     // wait until we have an event
     while (!vmi_are_events_pending(rio_vmi->vmi))
     {
@@ -303,17 +310,34 @@ static RList* __modules_get(RDebug *dbg) {
 }
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
+    RBreakpoint* rbreak = NULL;
     printf("%s, set: %d, addr: %p, hw: %d\n", __func__, set, b->addr, b->hw);
 
     if (!bp)
         return false;
 
+    if (b->hw)
+    {
+        eprintf("Hardware breakpoints not available in VMI debugger\n");
+        return false;
+    }
+
+    rbreak = (RBreakpoint*) bp;
 
     if (set)
     {
-
+        printf("setting breakpoint\n");
+        // write 0xCC
+        char int3 = 0xCC;
+        bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
+        if (!result)
+        {
+            eprintf("Fail to write software breakpoint");
+            return false;
+        }
     } else {
-
+        // write the instruction back
+        return false;
     }
 
     return true;
