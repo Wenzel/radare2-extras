@@ -174,8 +174,29 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int len) {
 }
 
 static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+    size_t bytes_written = 0;
+    access_context_t ctx;
+
     printf("%s\n", __func__);
 
+    if (!fd || !fd->data)
+        return -1;
+
+    rio_vmi = fd->data;
+    // fill access context
+    ctx.translate_mechanism = VMI_TM_PROCESS_PID;
+    ctx.addr = io->off;
+    ctx.pid = rio_vmi->pid;
+    // read
+    status = vmi_write(rio_vmi->vmi, &ctx, len, (void*)buf, &bytes_written);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("write %p: vmi_failure\n", (void*)io->off);
+        return 0;
+    }
+    return bytes_written;
 }
 
 static int __getpid(RIODesc *fd) {
