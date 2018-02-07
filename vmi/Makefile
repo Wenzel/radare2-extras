@@ -1,8 +1,10 @@
 include vmi.mk
 include r2.mk
 
-CFLAGS+=$(R2_CFLAGS)
-LDFLAGS+=$(R2_LDFLAGS)
+CFLAGS = -fPIC
+LDFLAGS = -shared
+CFLAGS += $(R2_CFLAGS) $(VMI_CFLAGS)
+LDFLAGS += $(R2_LDFLAGS) $(VMI_LDFLAGS)
 
 
 all: $(TARGETS)
