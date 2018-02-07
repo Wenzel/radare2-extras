@@ -1,7 +1,6 @@
 #include <r_asm.h>
 #include <r_debug.h>
-#include <libvmi/libvmi.h>
-#include <libvmi/events.h>
+#include <glib.h>
 
 #include "io_vmi.h"
 
@@ -298,9 +297,69 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
 }
 
 static RList *__map_get(RDebug* dbg) {
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+    addr_t dtb = 0;
+    char unknown[] = "unknown_";
+
     printf("%s\n", __func__);
 
-    return NULL;
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+    if (!rio_vmi)
+    {
+        eprintf("%s: Invalid RIOVmi\n", __func__);
+        return NULL;
+    }
+
+    status = vmi_pid_to_dtb(rio_vmi->vmi, rio_vmi->pid, &dtb);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to get dtb from pid\n");
+        return NULL;
+    }
+
+    GSList *va_pages = vmi_get_va_pages(rio_vmi->vmi, dtb);
+    if (!va_pages)
+    {
+        eprintf("Fail to get va pages\n");
+        return NULL;
+    }
+
+    RList *r_maps = r_list_newf((RListFree) r_debug_map_free);
+    GSList *loop = va_pages;
+    int nb = 0;
+    while (loop)
+    {
+        page_info_t *page = loop->data;
+        char str_nb[20];
+
+        // new map name
+        int str_nb_size = sprintf(str_nb, "%d", nb);
+        char *map_name = calloc(strlen(unknown) + str_nb_size + 1, 1);
+        strncat(map_name, unknown, sizeof(unknown));
+        strncat(map_name, str_nb, str_nb_size);
+        // build RDebugMap
+        addr_t map_start = page->vaddr;
+        addr_t map_end = page->vaddr + page->size;
+        RDebugMap *r_debug_map = r_debug_map_new (map_name, map_start, map_end, 0, 0);
+        // append
+        r_list_append (r_maps, r_debug_map);
+        // loop
+        loop = loop->next;
+        nb +=1;
+    }
+
+    // free va_pages
+    while (va_pages)
+    {
+        g_free(va_pages->data);
+        va_pages = va_pages->next;
+    }
+    g_slist_free(va_pages);
+
+    return r_maps;
 }
 
 static RList* __modules_get(RDebug *dbg) {
@@ -311,7 +370,7 @@ static RList* __modules_get(RDebug *dbg) {
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
     RBreakpoint* rbreak = NULL;
-    printf("%s, set: %d, addr: %p, hw: %d\n", __func__, set, b->addr, b->hw);
+    printf("%s, set: %d, addr: %llu, hw: %d\n", __func__, set, b->addr, b->hw);
 
     if (!bp)
         return false;

@@ -3,6 +3,7 @@
 
 #include <libvmi/libvmi.h>
 #include <libvmi/events.h>
+#include <libvmi/libvmi_extra.h>
 
 typedef struct {
     char *vm_name;
