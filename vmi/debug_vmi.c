@@ -337,7 +337,7 @@ static RList *__map_get(RDebug* dbg) {
         // build RDebugMap
         addr_t map_start = page->vaddr;
         addr_t map_end = page->vaddr + page->size;
-        RDebugMap *r_debug_map = r_debug_map_new (map_name, map_start, map_end, 0, 0);
+        RDebugMap *r_debug_map = r_debug_map_new (map_name, map_start, map_end, R_IO_READ | R_IO_WRITE | R_IO_EXEC, 0);
         // append
         r_list_append (r_maps, r_debug_map);
         // loop
