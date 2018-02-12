@@ -291,6 +291,7 @@ static RList *__map_get(RDebug* dbg) {
     RIOVmi *rio_vmi = NULL;
     status_t status;
     addr_t dtb = 0;
+    page_mode_t page_mode;
     char unknown[] = "unknown_";
 
     printf("%s\n", __func__);
@@ -310,6 +311,8 @@ static RList *__map_get(RDebug* dbg) {
         return NULL;
     }
 
+    page_mode = vmi_get_page_mode(rio_vmi->vmi, rio_vmi->current_vcpu);
+
     GSList *va_pages = vmi_get_va_pages(rio_vmi->vmi, dtb);
     if (!va_pages)
     {
@@ -322,7 +325,10 @@ static RList *__map_get(RDebug* dbg) {
     int nb = 0;
     while (loop)
     {
+        addr_t pte_value = 0;
         page_info_t *page = loop->data;
+        int permissions = R_IO_READ;
+        int supervisor = 0;
         char str_nb[20];
 
         // new map name
@@ -330,10 +336,31 @@ static RList *__map_get(RDebug* dbg) {
         char *map_name = calloc(strlen(unknown) + str_nb_size + 1, 1);
         strncat(map_name, unknown, sizeof(unknown));
         strncat(map_name, str_nb, str_nb_size);
+        // get permissions
+        switch (page_mode) {
+            case VMI_PM_LEGACY:
+                pte_value = page->x86_legacy.pte_value;
+                break;
+            case VMI_PM_PAE:
+                pte_value = page->x86_pae.pte_value;
+                if (!VMI_GET_BIT(pte_value, 63))
+                    permissions |= R_IO_EXEC;
+                break;
+            case VMI_PM_IA32E:
+                pte_value = page->x86_ia32e.pte_value;
+                break;
+            default:
+                eprintf("Unhandled page mode");
+                // TODO free
+                return NULL;
+        }
+        supervisor = USER_SUPERVISOR(pte_value);
+        if (READ_WRITE(pte_value))
+            permissions |= R_IO_WRITE;
         // build RDebugMap
         addr_t map_start = page->vaddr;
         addr_t map_end = page->vaddr + page->size;
-        RDebugMap *r_debug_map = r_debug_map_new (map_name, map_start, map_end, R_IO_READ | R_IO_WRITE | R_IO_EXEC, 0);
+        RDebugMap *r_debug_map = r_debug_map_new (map_name, map_start, map_end, permissions, supervisor);
         // append
         r_list_append (r_maps, r_debug_map);
         // loop
