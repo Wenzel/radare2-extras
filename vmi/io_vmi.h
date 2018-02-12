@@ -12,6 +12,7 @@ typedef struct {
     vmi_instance_t vmi;
     bool attached;
     vmi_event_t *wait_event;
+    uint64_t cr3_attach;
 } RIOVmi;
 
 #endif // IO_VMI_H

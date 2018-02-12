@@ -26,6 +26,8 @@ static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
 }
 
 static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
+    pid_t pid;
+
     printf("%s\n", __func__);
 
     if(!event || event->type != VMI_EVENT_REGISTER || !event->data) {
@@ -36,24 +38,30 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     // get event data
     cr3_load_event_data_t event_data = *(cr3_load_event_data_t*)(event->data);
 
-    reg_t cr3 = event->reg_event.value;
-    pid_t pid;
-    status_t status = vmi_dtb_to_pid(vmi, (addr_t) cr3, &pid);
+    status_t status = vmi_dtb_to_pid(vmi, (addr_t) event->reg_event.value, &pid);
     if (status == VMI_FAILURE)
     {
         eprintf("ERROR (%s): fail to retrieve pid from cr3\n", __func__);
         return 0;
     }
 
-    printf("pid: %d, cr3: %lx\n", pid, cr3);
+    printf("Intercepted PID: %d, CR3: 0x%lx\n", pid, event->reg_event.value);
     // check if it's our pid
     if (pid == event_data.pid)
     {
         // stop monitoring
         interrupted = true;
+        // pause the VM before we get out of main loop
+        status = vmi_pause_vm(vmi);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to pause VM\n");
+            return 0;
+        }
         // set current VCPU
-        printf("current VCPU: %d\n", event->vcpu_id);
         event_data.rio_vmi->current_vcpu = event->vcpu_id;
+        // save new CR3 value
+        event_data.rio_vmi->cr3_attach = event->reg_event.value;
     }
 
     return 0;
@@ -204,28 +212,13 @@ static int __attach(RDebug *dbg, int pid) {
         }
     }
 
-    uint64_t cr3;
-    status = vmi_get_vcpureg(rio_vmi->vmi, &cr3, CR3, 0);
-
-    status = vmi_dtb_to_pid(rio_vmi->vmi, cr3, &pid);
-    printf("attached to pid:%d\n", pid);
-
-    // make sure vm is paused before clearing the event
-    // clearing the event would resume the vm
-    status = vmi_pause_vm(rio_vmi->vmi);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to pause VM\n");
-        return 1;
-    }
-
+    // unregister cr3 event
     status = vmi_clear_event(rio_vmi->vmi, &cr3_load_event, NULL);
     if (status == VMI_FAILURE)
     {
         eprintf("Fail to clear event\n");
-        exit(1);
+        return 1;
     }
-
 
     // set attached to allow reg_read
     rio_vmi->attached = true;
@@ -296,6 +289,7 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
     return 0;
 }
 
+// "dm" get memory maps of target process
 static RList *__map_get(RDebug* dbg) {
     RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
@@ -391,7 +385,7 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
         bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
         if (!result)
         {
-            eprintf("Fail to write software breakpoint");
+            eprintf("Fail to write software breakpoint\n");
             return false;
         }
     } else {
@@ -409,27 +403,27 @@ static const char *__reg_profile(RDebug *dbg) {
     int bits = dbg->anal->bits;
 
     switch (arch) {
-        case R_SYS_ARCH_X86:
-            switch (bits) {
-                case 32:
-                    return strdup (
-#include "x86-32.h"
-                            );
-                            break;
-                case 64:
-                    return strdup (
-#include "x86-64.h"
-                            );
-                            break;
-                default:
-                    eprintf("bit size not supported by vmi debugger\n");
-                    return NULL;
-
-            }
+    case R_SYS_ARCH_X86:
+        switch (bits) {
+        case 32:
+            return strdup (
+            #include "x86-32.h"
+                        );
+            break;
+        case 64:
+            return strdup (
+            #include "x86-64.h"
+                        );
             break;
         default:
-            eprintf("Architecture not supported by vmi debugger\n");
+            eprintf("bit size not supported by vmi debugger\n");
             return NULL;
+
+        }
+        break;
+    default:
+        eprintf("Architecture not supported by vmi debugger\n");
+        return NULL;
     }
 
 }
@@ -473,6 +467,9 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     RIOVmi *rio_vmi = NULL;
     status_t status = 0;
     int buf_size = 0;
+    pid_t pid;
+    uint64_t cr3 = 0;
+    registers_t regs;
 
     printf("%s, type: %d, size:%d\n", __func__, type, size);
 
@@ -489,18 +486,22 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 
     unsigned int nb_vcpus = vmi_get_num_vcpus(rio_vmi->vmi);
 
-    registers_t regs;
-    uint64_t cr3 = 0;
-    pid_t pid;
     bool found = false;
     for (int vcpu = 0; vcpu < nb_vcpus; vcpu++)
     {
         // get cr3
-        status = vmi_get_vcpureg(rio_vmi->vmi, &cr3, CR3, vcpu);
-        if (status == VMI_FAILURE)
+        // if we have just attached, we cannot rely on vcpu_reg() since the VCPU
+        // state has not been synchronized with the new CR3 value from the attach event
+        if (rio_vmi->cr3_attach)
+            cr3 = rio_vmi->cr3_attach;
+        else
         {
-            eprintf("Fail to get vcpu registers\n");
-            return 1;
+            status = vmi_get_vcpureg(rio_vmi->vmi, &cr3, CR3, vcpu);
+            if (status == VMI_FAILURE)
+            {
+                eprintf("Fail to get vcpu registers\n");
+                return 1;
+            }
         }
         // convert to pid
         status = vmi_dtb_to_pid(rio_vmi->vmi, cr3, &pid);
@@ -509,7 +510,6 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
             eprintf("Fail to convert CR3 to PID\n");
             return 1;
         }
-        printf("dtb to pid: %d\n", pid);
         if (pid == rio_vmi->pid)
         {
             found = true;
@@ -534,27 +534,27 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
     int bits = dbg->anal->bits;
 
     switch (arch) {
-        case R_SYS_ARCH_X86:
-            switch (bits) {
-                case 32:
-                    eprintf("Bits not supported\n");
-                    return 1;
-                case 64:
-                    memcpy(buf      , &(regs.x86.rax), sizeof(regs.x86.rax));
-                    memcpy(buf + 8  , &(regs.x86.rbx), sizeof(regs.x86.rbx));
-                    memcpy(buf + 16 , &(regs.x86.rcx), sizeof(regs.x86.rcx));
-                    memcpy(buf + 24 , &(regs.x86.rdx), sizeof(regs.x86.rdx));
-                    memcpy(buf + 32 , &(regs.x86.rsi), sizeof(regs.x86.rsi));
-                    memcpy(buf + 40 , &(regs.x86.rdi), sizeof(regs.x86.rdi));
-                    memcpy(buf + 48 , &(regs.x86.rbp), sizeof(regs.x86.rbp));
-                    memcpy(buf + 56 , &(regs.x86.rsp), sizeof(regs.x86.rsp));
-                    memcpy(buf + 128, &(regs.x86.rip), sizeof(regs.x86.rip));
-                    break;
-            }
-            break;
-        default:
-            eprintf("Architecture not supported\n");
+    case R_SYS_ARCH_X86:
+        switch (bits) {
+        case 32:
+            eprintf("Bits not supported\n");
             return 1;
+        case 64:
+            memcpy(buf      , &(regs.x86.rax), sizeof(regs.x86.rax));
+            memcpy(buf + 8  , &(regs.x86.rbx), sizeof(regs.x86.rbx));
+            memcpy(buf + 16 , &(regs.x86.rcx), sizeof(regs.x86.rcx));
+            memcpy(buf + 24 , &(regs.x86.rdx), sizeof(regs.x86.rdx));
+            memcpy(buf + 32 , &(regs.x86.rsi), sizeof(regs.x86.rsi));
+            memcpy(buf + 40 , &(regs.x86.rdi), sizeof(regs.x86.rdi));
+            memcpy(buf + 48 , &(regs.x86.rbp), sizeof(regs.x86.rbp));
+            memcpy(buf + 56 , &(regs.x86.rsp), sizeof(regs.x86.rsp));
+            memcpy(buf + 128, &(regs.x86.rip), sizeof(regs.x86.rip));
+            break;
+        }
+        break;
+    default:
+        eprintf("Architecture not supported\n");
+        return 1;
     }
     buf_size = 128 + sizeof(uint64_t);
     // printf("RIP: %p\n", regs.x86.rip);
