@@ -286,6 +286,9 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
     }
     free(rio_vmi->wait_event);
 
+    // invalidate attach_cr3
+    rio_vmi->cr3_attach = 0;
+
     return 0;
 }
 
