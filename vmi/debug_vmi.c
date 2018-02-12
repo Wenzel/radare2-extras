@@ -18,10 +18,17 @@ typedef struct {
 // callbacks
 //
 static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
+    status_t status;
+
     printf("%s\n", __func__);
 
     // stop monitoring
     interrupted = true;
+    // pause the VM before exiting the callback
+    status = vmi_pause_vm(vmi);
+    if (status == VMI_FAILURE)
+        eprintf("Fail to pause VM\n");
+
     return 0;
 }
 
@@ -249,20 +256,6 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
     {
         eprintf("%s: Invalid RIOVmi\n", __func__);
         return 1;
-    }
-
-    // wait until we have an event
-    while (!vmi_are_events_pending(rio_vmi->vmi))
-    {
-        usleep(1000);
-    }
-
-    // pause vm again
-    status = vmi_pause_vm(rio_vmi->vmi);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to pause VM\n");
-        return false;
     }
 
     interrupted = false;
