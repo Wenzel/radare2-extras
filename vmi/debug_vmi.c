@@ -4,6 +4,8 @@
 
 #include "io_vmi.h"
 
+static RIOVmi *g_rio_vmi = NULL;
+
 // vmi_events_listen loop
 static bool interrupted = false;
 
@@ -15,8 +17,44 @@ typedef struct {
 } cr3_load_event_data_t;
 
 //
+// helpers
+//
+// stolen from libvmi/examples/step-event-example
+static void print_event(vmi_event_t *event)
+{
+    printf("\tPAGE ACCESS: %c%c%c for GFN %"PRIx64" (offset %06"PRIx64") gla %016"PRIx64" (vcpu %u)\n",
+           (event->mem_event.out_access & VMI_MEMACCESS_R) ? 'r' : '-',
+           (event->mem_event.out_access & VMI_MEMACCESS_W) ? 'w' : '-',
+           (event->mem_event.out_access & VMI_MEMACCESS_X) ? 'x' : '-',
+           event->mem_event.gfn,
+           event->mem_event.offset,
+           event->mem_event.gla,
+           event->vcpu_id
+          );
+}
+
+//
 // callbacks
 //
+static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
+    reg_t rip;
+    status_t status;
+
+    printf("%s\n", __func__);
+    status = vmi_get_vcpureg(vmi, &rip, RIP, 0);
+    if (VMI_FAILURE == status)
+    {
+        eprintf("fail to get vcpueg\n");
+        return 0;
+    }
+    printf("RIP: %"PRIx64 "\n", rip);
+
+    print_event(event);
+    interrupted = true;
+    printf("end callback\n");
+    return 0;
+}
+
 static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
     status_t status;
 
@@ -139,19 +177,8 @@ static int __continue(RDebug *dbg, int pid, int tid, int sig) {
         return 1;
     }
 
-    // register event for int3
-    rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
-    SETUP_INTERRUPT_EVENT(rio_vmi->wait_event, 0, cb_on_int3);
-
-    status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
-    if (status == VMI_FAILURE)
-    {
-        eprintf("Fail to register event\n");
-        return 1;
-    }
-
     status = vmi_resume_vm(rio_vmi->vmi);
-    if (status == VMI_FAILURE)
+    if (VMI_FAILURE == status)
     {
         eprintf("Failed to resume VM execution\n");
         return 1;
@@ -174,6 +201,8 @@ static int __attach(RDebug *dbg, int pid) {
         eprintf("%s: Invalid RIOVmi\n", __func__);
         return 1;
     }
+    // hack to get rio_vmi in __breakpoint
+    g_rio_vmi = rio_vmi;
 
     status = vmi_pause_vm(rio_vmi->vmi);
     if (status == VMI_FAILURE)
@@ -272,7 +301,7 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
 
     // clear event
     status = vmi_clear_event(rio_vmi->vmi, rio_vmi->wait_event, NULL);
-    if (status == VMI_FAILURE)
+    if (VMI_FAILURE == status)
     {
         eprintf("Fail to clear event\n");
         return false;
@@ -387,29 +416,67 @@ static RList* __modules_get(RDebug *dbg) {
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
     RBreakpoint* rbreak = NULL;
-    printf("%s, set: %d, addr: %llu, hw: %d\n", __func__, set, b->addr, b->hw);
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+    addr_t bp_vaddr = b->addr;
+    printf("%s, set: %d, addr: %"PRIx64", hw: %d\n", __func__, set, bp_vaddr, b->hw);
 
     if (!bp)
         return false;
 
-    if (b->hw)
-    {
-        eprintf("Hardware breakpoints not available in VMI debugger\n");
-        return false;
-    }
-
     rbreak = (RBreakpoint*) bp;
+    // i don't know how to access my desc from here
+    // desc = rbreak->iob.desc_get(rbreak->iob.io, rbreak->iob.io->);
+    // rio_vmi = desc->data
+    // use g_rio_vmi for now
+    rio_vmi = g_rio_vmi;
 
     if (set)
     {
-        printf("setting breakpoint\n");
-        // write 0xCC
-        char int3 = 0xCC;
-        bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
-        if (!result)
+        if (b->hw)
         {
-            eprintf("Fail to write software breakpoint\n");
-            return false;
+            // need to translate the virtual address to physical
+            addr_t paddr = 0;
+            status = vmi_translate_kv2p(g_rio_vmi->vmi, bp_vaddr, &paddr);
+            if (VMI_FAILURE == status)
+            {
+                eprintf("Fail to get physical addresss\n");
+                return 1;
+            }
+
+            // get guest frame number
+            addr_t gfn = paddr >> 12;
+            printf("paddr: %016"PRIx64", gfn: %"PRIx64"\n", paddr, gfn);
+
+            rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
+            SETUP_MEM_EVENT(rio_vmi->wait_event, gfn, VMI_MEMACCESS_X, cb_on_mem_event, 0);
+            // add event_data (rio_vmi)
+            rio_vmi->wait_event->data = (void*)rio_vmi;
+        }
+        else
+        {
+            // write 0xCC
+            char int3 = 0xCC;
+            bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
+            if (!result)
+            {
+                eprintf("Fail to write software breakpoint\n");
+                return false;
+            }
+
+            // register event for int3
+            rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
+            SETUP_INTERRUPT_EVENT(rio_vmi->wait_event, 0, cb_on_int3);
+        }
+
+        // register breakpoint event
+        // either interrupt or mem event
+        status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
+        if (VMI_FAILURE == status)
+        {
+            eprintf("Fail to register event\n");
+            return 1;
         }
     } else {
         // write the instruction back
