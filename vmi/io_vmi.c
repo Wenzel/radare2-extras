@@ -66,7 +66,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     rio_vmi->current_vcpu = -1;
     rio_vmi->attached = false;
     // init breakpoint ghastable
-    rio_vmi->bp_events_table = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, free);
+    rio_vmi->bp_events_table = g_hash_table_new(g_direct_hash, g_direct_equal);
     // URI has the following format: vmi://vm_name:pid
     // parse URI
     uri_content = strdup(pathname + strlen(URI_PREFIX));

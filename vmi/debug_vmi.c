@@ -8,6 +8,12 @@ static RIOVmi *g_rio_vmi = NULL;
 // vmi_events_listen loop
 static bool interrupted = false;
 
+typedef struct
+{
+    uint64_t pid_cr3;
+    addr_t bp_vaddr;
+} bp_event_data;
+
 //
 // helpers
 //
@@ -29,20 +35,44 @@ static void print_event(vmi_event_t *event)
 // callbacks
 //
 static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
-    reg_t rip;
     status_t status;
+    bp_event_data *event_data;
 
     printf("%s\n", __func__);
-    status = vmi_get_vcpureg(vmi, &rip, RIP, 0);
-    if (VMI_FAILURE == status)
-    {
-        eprintf("fail to get vcpueg\n");
+
+    if(!event || event->type != VMI_EVENT_MEMORY || !event->data) {
+        eprintf("ERROR (%s): invalid event encounted\n", __func__);
         return 0;
     }
-    printf("RIP: %"PRIx64 "\n", rip);
 
+    // get event_data
+    event_data = (bp_event_data*) event->data;
+
+    // our pid ?
+    if (event->x86_regs->cr3 != event_data->pid_cr3)
+    {
+        eprintf("mem_event: wrong cr3\n");
+        return VMI_EVENT_RESPONSE_EMULATE;
+    }
+
+    // at the right rip ?
+    if (event->x86_regs->rip != event_data->bp_vaddr)
+    {
+        eprintf("mem_event: wrong rip: %"PRIx64" (bp: %"PRIx64")\n", event->x86_regs->rip, event_data->bp_vaddr);
+        return VMI_EVENT_RESPONSE_EMULATE;
+    }
+
+    printf("RIP: %"PRIx64 "\n", event->x86_regs->rip);
     print_event(event);
+
+    // pause VM
+    status = vmi_pause_vm(vmi);
+    if (VMI_FAILURE == status)
+        eprintf("Fail to pause vm\n");
+
+    // stop listen
     interrupted = true;
+
     return 0;
 }
 
@@ -50,6 +80,11 @@ static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
     status_t status;
 
     printf("%s\n", __func__);
+
+    if(!event || event->type != VMI_EVENT_SINGLESTEP) {
+        eprintf("ERROR (%s): invalid event encounted\n", __func__);
+        return 0;
+    }
 
     // stop monitoring
     interrupted = true;
@@ -98,7 +133,7 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
         // set current VCPU
         rio_vmi->current_vcpu = event->vcpu_id;
         // save new CR3 value
-        rio_vmi->cr3_attach = event->reg_event.value;
+        rio_vmi->pid_cr3 = event->reg_event.value;
     }
 
     return 0;
@@ -224,6 +259,7 @@ static int __attach(RDebug *dbg, int pid) {
         return 1;
     }
 
+
     while (!interrupted)
     {
         printf("Listening on VMI events...\n");
@@ -302,7 +338,7 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
     }
 
     // invalidate attach_cr3
-    rio_vmi->cr3_attach = 0;
+    rio_vmi->pid_cr3 = 0;
 
     return 0;
 }
@@ -473,8 +509,16 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
             }
             SETUP_INTERRUPT_EVENT(bp_event, 0, cb_on_int3);
         }
-        // add event data (breakpoint vaddr)
-        bp_event->data = (void*) bp_vaddr;
+        // add event data
+        bp_event_data *event_data = calloc(1, sizeof(bp_event_data));
+        if (!event_data)
+        {
+            eprintf("Fail to allocate memory\n");
+            return false;
+        }
+        event_data->pid_cr3 = rio_vmi->pid_cr3;
+        event_data->bp_vaddr = bp_vaddr;
+        bp_event->data = event_data;
 
         // add our breakpoint to the hashtable
         // [bp_vaddr] -> [vmi_event *]
@@ -507,8 +551,11 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
                 eprintf("Fail to clear event\n");
                 return false;
             }
+            if (bp_event->data)
+                free(bp_event->data);
+            free(bp_event);
+
             // remove key/value from table
-            // the vmi_event will already be freed by the ghashtable
             ret = g_hash_table_remove(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr));
             if (FALSE == ret)
             {
@@ -630,8 +677,8 @@ static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
         // get cr3
         // if we have just attached, we cannot rely on vcpu_reg() since the VCPU
         // state has not been synchronized with the new CR3 value from the attach event
-        if (rio_vmi->cr3_attach)
-            cr3 = rio_vmi->cr3_attach;
+        if (rio_vmi->pid_cr3)
+            cr3 = rio_vmi->pid_cr3;
         else
         {
             status = vmi_get_vcpureg(rio_vmi->vmi, &cr3, CR3, vcpu);

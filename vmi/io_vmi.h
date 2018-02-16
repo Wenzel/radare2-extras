@@ -10,6 +10,7 @@
 typedef struct {
     char *vm_name;
     int pid;
+    uint64_t pid_cr3;
     int current_vcpu;
     vmi_instance_t vmi;
     bool attached;
@@ -17,7 +18,6 @@ typedef struct {
     // table [rip] -> [vmi_event_t]
     // event might be int3 or mem_event
     GHashTable *bp_events_table;
-    uint64_t cr3_attach;
 } RIOVmi;
 
 #endif // IO_VMI_H
