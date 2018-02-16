@@ -9,13 +9,6 @@ static RIOVmi *g_rio_vmi = NULL;
 // vmi_events_listen loop
 static bool interrupted = false;
 
-typedef struct {
-    pid_t pid;
-    registers_t regs;
-    status_t status;
-    RIOVmi *rio_vmi;
-} cr3_load_event_data_t;
-
 //
 // helpers
 //
@@ -71,7 +64,8 @@ static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
 }
 
 static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
-    pid_t pid;
+    RIOVmi *rio_vmi = NULL;
+    pid_t pid = 0;
 
     printf("%s\n", __func__);
 
@@ -81,7 +75,7 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     }
 
     // get event data
-    cr3_load_event_data_t event_data = *(cr3_load_event_data_t*)(event->data);
+    rio_vmi = (RIOVmi*) event->data;
 
     status_t status = vmi_dtb_to_pid(vmi, (addr_t) event->reg_event.value, &pid);
     if (status == VMI_FAILURE)
@@ -92,7 +86,7 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
 
     printf("Intercepted PID: %d, CR3: 0x%lx\n", pid, event->reg_event.value);
     // check if it's our pid
-    if (pid == event_data.pid)
+    if (pid == rio_vmi->pid)
     {
         // stop monitoring
         interrupted = true;
@@ -104,9 +98,9 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
             return 0;
         }
         // set current VCPU
-        event_data.rio_vmi->current_vcpu = event->vcpu_id;
+        rio_vmi->current_vcpu = event->vcpu_id;
         // save new CR3 value
-        event_data.rio_vmi->cr3_attach = event->reg_event.value;
+        rio_vmi->cr3_attach = event->reg_event.value;
     }
 
     return 0;
@@ -214,13 +208,8 @@ static int __attach(RDebug *dbg, int pid) {
     vmi_event_t cr3_load_event = {0};
     SETUP_REG_EVENT(&cr3_load_event, CR3, VMI_REGACCESS_W, 0, cb_on_cr3_load);
 
-    // preparing event data
-    cr3_load_event_data_t event_data = {0};
-    event_data.pid = rio_vmi->pid;
-    event_data.rio_vmi = rio_vmi;
-
-    // add it to cr3_load_event
-    cr3_load_event.data = (void*)&event_data;
+    // setting event data
+    cr3_load_event.data = (void*) rio_vmi;
 
     status = vmi_register_event(rio_vmi->vmi, &cr3_load_event);
     if (status == VMI_FAILURE)
