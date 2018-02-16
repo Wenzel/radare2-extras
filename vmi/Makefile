@@ -1,7 +1,7 @@
 include vmi.mk
 include r2.mk
 
-CFLAGS = -fPIC
+CFLAGS = -Wall -fPIC
 LDFLAGS = -shared
 CFLAGS += $(R2_CFLAGS) $(VMI_CFLAGS)
 LDFLAGS += $(R2_LDFLAGS) $(VMI_LDFLAGS)

@@ -249,17 +249,18 @@ static int __attach(RDebug *dbg, int pid) {
     rio_vmi->attached = true;
 
     return 0;
-
 }
 
 static int __detach(RDebug *dbg, int pid) {
     printf("%s\n", __func__);
 
+    return 1;
 }
 
 static RList* __threads(RDebug *dbg, int pid) {
     printf("%s\n", __func__);
 
+    return NULL;
 }
 
 static RDebugReasonType __wait(RDebug *dbg, int pid) {
@@ -405,7 +406,7 @@ static RList* __modules_get(RDebug *dbg) {
 
 static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
     RBreakpoint* rbreak = NULL;
-    RIODesc *desc = NULL;
+    // RIODesc *desc = NULL;
     RIOVmi *rio_vmi = NULL;
     status_t status;
     addr_t bp_vaddr = b->addr;
@@ -446,7 +447,7 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
         else
         {
             // write 0xCC
-            char int3 = 0xCC;
+            const unsigned char int3 = 0xCC;
             bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
             if (!result)
             {
@@ -529,16 +530,19 @@ static bool __kill(RDebug *dbg, int pid, int tid, int sig) {
 static int __select(int pid, int tid) {
     printf("%s\n", __func__);
 
+    return 1;
 }
 
 static RDebugInfo* __info(RDebug *dbg, const char *arg) {
     printf("%s\n", __func__);
 
+    return NULL;
 }
 
 static RList* __frames(RDebug *dbg, ut64 at) {
     printf("%s\n", __func__);
 
+    return NULL;
 }
 
 static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
