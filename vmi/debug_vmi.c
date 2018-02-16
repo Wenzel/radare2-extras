@@ -1,6 +1,5 @@
 #include <r_asm.h>
 #include <r_debug.h>
-#include <glib.h>
 
 #include "io_vmi.h"
 
@@ -23,7 +22,7 @@ static void print_event(vmi_event_t *event)
            event->mem_event.offset,
            event->mem_event.gla,
            event->vcpu_id
-          );
+           );
 }
 
 //
@@ -44,7 +43,6 @@ static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
 
     print_event(event);
     interrupted = true;
-    printf("end callback\n");
     return 0;
 }
 
@@ -131,13 +129,13 @@ static int __step(RDebug *dbg) {
         return 1;
     }
 
-    rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
-    rio_vmi->wait_event->version = VMI_EVENTS_VERSION;
-    rio_vmi->wait_event->type = VMI_EVENT_SINGLESTEP;
-    rio_vmi->wait_event->callback = cb_on_sstep;
-    rio_vmi->wait_event->ss_event.enable = 1;
-    SET_VCPU_SINGLESTEP(rio_vmi->wait_event->ss_event, rio_vmi->current_vcpu);
-    status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
+    rio_vmi->sstep_event = calloc(1, sizeof(vmi_event_t));
+    rio_vmi->sstep_event->version = VMI_EVENTS_VERSION;
+    rio_vmi->sstep_event->type = VMI_EVENT_SINGLESTEP;
+    rio_vmi->sstep_event->callback = cb_on_sstep;
+    rio_vmi->sstep_event->ss_event.enable = 1;
+    SET_VCPU_SINGLESTEP(rio_vmi->sstep_event->ss_event, rio_vmi->current_vcpu);
+    status = vmi_register_event(rio_vmi->vmi, rio_vmi->sstep_event);
     if (status == VMI_FAILURE)
     {
         eprintf("Failed to register event\n");
@@ -289,14 +287,19 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
         printf("Listening done\n");
     }
 
-    // clear event
-    status = vmi_clear_event(rio_vmi->vmi, rio_vmi->wait_event, NULL);
-    if (VMI_FAILURE == status)
+    // clear event if singlestep
+    // breakpoint events are cleared in __breakpoint if unset
+    // was it a single step ?
+    if (rio_vmi->sstep_event)
     {
-        eprintf("Fail to clear event\n");
-        return false;
+        status = vmi_clear_event(rio_vmi->vmi, rio_vmi->sstep_event, NULL);
+        if (VMI_FAILURE == status)
+        {
+            eprintf("Fail to clear event\n");
+            return false;
+        }
+        free(rio_vmi->sstep_event);
     }
-    free(rio_vmi->wait_event);
 
     // invalidate attach_cr3
     rio_vmi->cr3_attach = 0;
@@ -357,21 +360,21 @@ static RList *__map_get(RDebug* dbg) {
         strncat(map_name, str_nb, str_nb_size);
         // get permissions
         switch (page_mode) {
-            case VMI_PM_LEGACY:
-                pte_value = page->x86_legacy.pte_value;
-                break;
-            case VMI_PM_PAE:
-                pte_value = page->x86_pae.pte_value;
-                if (!VMI_GET_BIT(pte_value, 63))
-                    permissions |= R_IO_EXEC;
-                break;
-            case VMI_PM_IA32E:
-                pte_value = page->x86_ia32e.pte_value;
-                break;
-            default:
-                eprintf("Unhandled page mode");
-                // TODO free
-                return NULL;
+        case VMI_PM_LEGACY:
+            pte_value = page->x86_legacy.pte_value;
+            break;
+        case VMI_PM_PAE:
+            pte_value = page->x86_pae.pte_value;
+            if (!VMI_GET_BIT(pte_value, 63))
+                permissions |= R_IO_EXEC;
+            break;
+        case VMI_PM_IA32E:
+            pte_value = page->x86_ia32e.pte_value;
+            break;
+        default:
+            eprintf("Unhandled page mode");
+            // TODO free
+            return NULL;
         }
         supervisor = USER_SUPERVISOR(pte_value);
         if (READ_WRITE(pte_value))
@@ -410,6 +413,8 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
     RIOVmi *rio_vmi = NULL;
     status_t status;
     addr_t bp_vaddr = b->addr;
+    gboolean ret;
+    vmi_event_t *bp_event = NULL;
     printf("%s, set: %d, addr: %"PRIx64", hw: %d\n", __func__, set, bp_vaddr, b->hw);
 
     if (!bp)
@@ -439,10 +444,14 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
             addr_t gfn = paddr >> 12;
             printf("paddr: %016"PRIx64", gfn: %"PRIx64"\n", paddr, gfn);
 
-            rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
-            SETUP_MEM_EVENT(rio_vmi->wait_event, gfn, VMI_MEMACCESS_X, cb_on_mem_event, 0);
-            // add event_data (rio_vmi)
-            rio_vmi->wait_event->data = (void*)rio_vmi;
+            // prepare new vmi_event
+            bp_event = calloc(1, sizeof(vmi_event_t));
+            if (!bp_event)
+            {
+                eprintf("Fail to allocate memory\n");
+                return false;
+            }
+            SETUP_MEM_EVENT(bp_event, gfn, VMI_MEMACCESS_X, cb_on_mem_event, 0);
         }
         else
         {
@@ -455,22 +464,68 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
                 return false;
             }
 
-            // register event for int3
-            rio_vmi->wait_event = calloc(1, sizeof(vmi_event_t));
-            SETUP_INTERRUPT_EVENT(rio_vmi->wait_event, 0, cb_on_int3);
+            // prepare new vmi_event
+            bp_event = calloc(1, sizeof(vmi_event_t));
+            if (!bp_event)
+            {
+                eprintf("Fail to allocate memory\n");
+                return false;
+            }
+            SETUP_INTERRUPT_EVENT(bp_event, 0, cb_on_int3);
         }
+        // add event data (breakpoint vaddr)
+        bp_event->data = (void*) bp_vaddr;
+
+        // add our breakpoint to the hashtable
+        // [bp_vaddr] -> [vmi_event *]
+        ret = g_hash_table_insert(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr), bp_event);
+        if (FALSE == ret)
+        {
+            eprintf("Fail to insert event into ghashtable\n");
+            return 1;
+        }
+        printf("after insert\n");
 
         // register breakpoint event
         // either interrupt or mem event
-        status = vmi_register_event(rio_vmi->vmi, rio_vmi->wait_event);
+        status = vmi_register_event(rio_vmi->vmi, bp_event);
         if (VMI_FAILURE == status)
         {
             eprintf("Fail to register event\n");
             return 1;
         }
     } else {
-        // write the instruction back
-        return false;
+        // unset
+        // get event from ghashtable
+        bp_event = (vmi_event_t*) g_hash_table_lookup(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr));
+        if (bp_event)
+        {
+            // unregister event
+            status = vmi_clear_event(rio_vmi->vmi, bp_event, NULL);
+            if (VMI_FAILURE == status)
+            {
+                eprintf("Fail to clear event\n");
+                return false;
+            }
+            // remove key/value from table
+            // the vmi_event will already be freed by the ghashtable
+            ret = g_hash_table_remove(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr));
+            if (FALSE == ret)
+            {
+                eprintf("Fail to remove key from breakpoint table\n");
+                return false;
+            }
+
+            if (!b->hw)
+            {
+                // TODO write instruction back, replace int3
+            }
+        }
+        else
+        {
+            eprintf("Fail to find breakpoint in table\n");
+            return false;
+        }
     }
 
     return true;
