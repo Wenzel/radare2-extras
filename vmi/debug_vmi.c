@@ -117,7 +117,7 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
         return 0;
     }
 
-    printf("Intercepted PID: %d, CR3: 0x%lx\n", pid, event->reg_event.value);
+    printf("Intercepted PID: %d, CR3: 0x%lx, RIP: 0x%lx\n", pid, event->reg_event.value, event->x86_regs->rip);
     // check if it's our pid
     if (pid == rio_vmi->pid)
     {
@@ -145,6 +145,34 @@ static event_response_t cb_on_int3(vmi_instance_t vmi, vmi_event_t *event){
     return 0;
 }
 
+static void unregister_breakpoint(gpointer key, gpointer value, gpointer user_data)
+{
+    addr_t bp_vaddr = (addr_t) key;
+    vmi_event_t *event = (vmi_event_t*) value;
+    RIOVmi *rio_vmi = (RIOVmi*) user_data;
+    status_t status;
+
+    status = vmi_clear_event(rio_vmi->vmi, event, NULL);
+    if (VMI_FAILURE == status)
+    {
+        eprintf("Fail to clear breakpoint %"PRIx64"\n", bp_vaddr);
+    }
+}
+
+static void register_breakpoint(gpointer key, gpointer value, gpointer user_data)
+{
+    addr_t bp_vaddr = (addr_t) key;
+    vmi_event_t *event = (vmi_event_t*) value;
+    RIOVmi *rio_vmi = (RIOVmi*) user_data;
+    status_t status;
+
+    status = vmi_register_event(rio_vmi->vmi, event);
+    if (VMI_FAILURE == status)
+    {
+        eprintf("Fail to register breakpoint %"PRIx64"\n", bp_vaddr);
+    }
+}
+
 
 //
 // R2 debug interface
@@ -163,6 +191,11 @@ static int __step(RDebug *dbg) {
         eprintf("%s: Invalid RIOVmi\n", __func__);
         return 1;
     }
+
+    // clear all breakpoint events
+    // otherwise we risk to get a breakpoint event instead of singlestep event
+    // if they are on the same RIP
+    g_hash_table_foreach(rio_vmi->bp_events_table, unregister_breakpoint, (gpointer) rio_vmi);
 
     rio_vmi->sstep_event = calloc(1, sizeof(vmi_event_t));
     rio_vmi->sstep_event->version = VMI_EVENTS_VERSION;
@@ -335,6 +368,8 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
             return false;
         }
         free(rio_vmi->sstep_event);
+        // re-register all breakpoint events that we previously unregistered
+        g_hash_table_foreach(rio_vmi->bp_events_table, register_breakpoint, (gpointer) rio_vmi);
     }
 
     // invalidate attach_cr3
