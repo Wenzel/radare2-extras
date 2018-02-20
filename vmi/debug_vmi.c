@@ -465,78 +465,86 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
 
     if (set)
     {
-        if (b->hw)
+        // the breakpoint API will be called multiple times for the same breakpoint
+        // in case of single stepping for example, radare2 still calls this API
+        // for each breakpoint before the single-step
+        // therefore, check if the breakpoint has already been inserted
+        bp_event = (vmi_event_t*) g_hash_table_lookup(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr));
+        if (!bp_event)
         {
-            // need to translate the virtual address to physical
-            addr_t paddr = 0;
-            status = vmi_translate_kv2p(g_rio_vmi->vmi, bp_vaddr, &paddr);
-            if (VMI_FAILURE == status)
+            if (b->hw)
             {
-                eprintf("Fail to get physical addresss\n");
+                // need to translate the virtual address to physical
+                addr_t paddr = 0;
+                status = vmi_translate_kv2p(g_rio_vmi->vmi, bp_vaddr, &paddr);
+                if (VMI_FAILURE == status)
+                {
+                    eprintf("Fail to get physical addresss\n");
+                    return 1;
+                }
+
+                // get guest frame number
+                addr_t gfn = paddr >> 12;
+                printf("paddr: %016"PRIx64", gfn: %"PRIx64"\n", paddr, gfn);
+
+                // prepare new vmi_event
+                bp_event = calloc(1, sizeof(vmi_event_t));
+                if (!bp_event)
+                {
+                    eprintf("Fail to allocate memory\n");
+                    return false;
+                }
+                SETUP_MEM_EVENT(bp_event, gfn, VMI_MEMACCESS_X, cb_on_mem_event, 0);
+            }
+            else
+            {
+                // write 0xCC
+                const unsigned char int3 = 0xCC;
+                bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
+                if (!result)
+                {
+                    eprintf("Fail to write software breakpoint\n");
+                    return false;
+                }
+
+                // prepare new vmi_event
+                bp_event = calloc(1, sizeof(vmi_event_t));
+                if (!bp_event)
+                {
+                    eprintf("Fail to allocate memory\n");
+                    return false;
+                }
+                SETUP_INTERRUPT_EVENT(bp_event, 0, cb_on_int3);
+            }
+            // add event data
+            bp_event_data *event_data = calloc(1, sizeof(bp_event_data));
+            if (!event_data)
+            {
+                eprintf("Fail to allocate memory\n");
+                return false;
+            }
+            event_data->pid_cr3 = rio_vmi->pid_cr3;
+            event_data->bp_vaddr = bp_vaddr;
+            bp_event->data = event_data;
+
+            // add our breakpoint to the hashtable
+            // [bp_vaddr] -> [vmi_event *]
+            ret = g_hash_table_insert(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr), bp_event);
+            if (FALSE == ret)
+            {
+                eprintf("Fail to insert event into ghashtable\n");
                 return 1;
             }
+            printf("after insert\n");
 
-            // get guest frame number
-            addr_t gfn = paddr >> 12;
-            printf("paddr: %016"PRIx64", gfn: %"PRIx64"\n", paddr, gfn);
-
-            // prepare new vmi_event
-            bp_event = calloc(1, sizeof(vmi_event_t));
-            if (!bp_event)
+            // register breakpoint event
+            // either interrupt or mem event
+            status = vmi_register_event(rio_vmi->vmi, bp_event);
+            if (VMI_FAILURE == status)
             {
-                eprintf("Fail to allocate memory\n");
-                return false;
+                eprintf("Fail to register event\n");
+                return 1;
             }
-            SETUP_MEM_EVENT(bp_event, gfn, VMI_MEMACCESS_X, cb_on_mem_event, 0);
-        }
-        else
-        {
-            // write 0xCC
-            const unsigned char int3 = 0xCC;
-            bool result = rbreak->iob.write_at(rbreak->iob.io, b->addr, &int3, sizeof(int3));
-            if (!result)
-            {
-                eprintf("Fail to write software breakpoint\n");
-                return false;
-            }
-
-            // prepare new vmi_event
-            bp_event = calloc(1, sizeof(vmi_event_t));
-            if (!bp_event)
-            {
-                eprintf("Fail to allocate memory\n");
-                return false;
-            }
-            SETUP_INTERRUPT_EVENT(bp_event, 0, cb_on_int3);
-        }
-        // add event data
-        bp_event_data *event_data = calloc(1, sizeof(bp_event_data));
-        if (!event_data)
-        {
-            eprintf("Fail to allocate memory\n");
-            return false;
-        }
-        event_data->pid_cr3 = rio_vmi->pid_cr3;
-        event_data->bp_vaddr = bp_vaddr;
-        bp_event->data = event_data;
-
-        // add our breakpoint to the hashtable
-        // [bp_vaddr] -> [vmi_event *]
-        ret = g_hash_table_insert(rio_vmi->bp_events_table, GINT_TO_POINTER(bp_vaddr), bp_event);
-        if (FALSE == ret)
-        {
-            eprintf("Fail to insert event into ghashtable\n");
-            return 1;
-        }
-        printf("after insert\n");
-
-        // register breakpoint event
-        // either interrupt or mem event
-        status = vmi_register_event(rio_vmi->vmi, bp_event);
-        if (VMI_FAILURE == status)
-        {
-            eprintf("Fail to register event\n");
-            return 1;
         }
     } else {
         // unset
