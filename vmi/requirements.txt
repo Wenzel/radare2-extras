@@ -1,0 +1,3 @@
+docopt==0.6.2
+pkg-resources==0.0.0
+r2pipe==0.9.8
