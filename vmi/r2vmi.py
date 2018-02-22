@@ -21,14 +21,13 @@ from vmi_as import VMIAddressSpace
 # 3rd
 import r2pipe
 from docopt import docopt
+
 from rekall import session
 from rekall import plugins
 
 
 def init_logger():
-    logger = logging.getLogger()
-    logger.addHandler(logging.StreamHandler())
-    logger.setLevel(logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
 
 
 def init_rekall(domain):
@@ -39,7 +38,7 @@ def init_rekall(domain):
         profile_path=[
             "http://profiles.rekall-forensic.com"
         ])
-    s.physical_address_space = VMIAddressSpace(domain)
+    s.physical_address_space = VMIAddressSpace(filename=domain, session=s)
     return s
 
 def main(args):
