@@ -3,3 +3,5 @@
 *.creator.user
 *.files
 *.includes
+.idea/
+__pycache__
