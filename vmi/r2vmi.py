@@ -26,10 +26,6 @@ from rekall import session
 from rekall import plugins
 
 
-def init_logger():
-    logging.basicConfig(level=logging.DEBUG)
-
-
 def init_rekall(domain):
     s = session.Session(
         autodetect=["rsds"],
@@ -42,12 +38,11 @@ def init_rekall(domain):
     return s
 
 def main(args):
-    init_logger()
     vm_name = args['<vm_name>']
     pid = args['<pid>']
     session = init_rekall(vm_name)
     output = session.plugins.pslist()
-    logging.info(output)
+    print(output)
 
     # url = 'vmi://{}:{}'.format(vm_name, pid)
     # r2 = r2pipe.open(url, ['-d'])
