@@ -16,7 +16,7 @@ import sys
 import logging
 
 # local
-from vmi_as import VMIAddressSpace
+from vmiaddressspace import VMIAddressSpace
 
 # 3rd
 import r2pipe
