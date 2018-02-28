@@ -18,7 +18,7 @@ class VMIAddressSpace(addrspace.BaseAddressSpace):
         self.as_assert(domain, "domain name missing")
 
         super(VMIAddressSpace, self).__init__(base=base,session=session,**kwargs)
-        self.vmi = Libvmi(domain)
+        self.vmi = Libvmi(domain, partial=True)
 
     def close(self):
         self.vmi.destroy()
