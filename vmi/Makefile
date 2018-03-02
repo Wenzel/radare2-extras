@@ -12,7 +12,7 @@ all: $(TARGETS)
 %.$(SO_EXT): %.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
-install:
+install: all
 	mkdir -p $(R2_USER_PLUGINS)
 	cp -f $(TARGETS) $(R2_USER_PLUGINS)
 
