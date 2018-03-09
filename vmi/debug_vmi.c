@@ -140,9 +140,51 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
 }
 
 static event_response_t cb_on_int3(vmi_instance_t vmi, vmi_event_t *event){
+    status_t status;
+    bp_event_data *event_data;
+
     printf("%s\n", __func__);
 
-    return 0;
+    if(!event || event->type != VMI_EVENT_INTERRUPT || !event->data) {
+        eprintf("ERROR (%s): invalid event encounted\n", __func__);
+        return VMI_EVENT_RESPONSE_NONE;
+    }
+
+    // get event_data
+    event_data = (bp_event_data*) event->data;
+
+    // by default, reinject the interrupt (not ours)
+    event->interrupt_event.reinject = 1;
+
+    // our pid ?
+    if (event->x86_regs->cr3 != event_data->pid_cr3)
+    {
+        eprintf("int3_event: wrong cr3\n");
+        return VMI_EVENT_RESPONSE_NONE;
+    }
+
+    // at the right rip ?
+    if (event->x86_regs->rip != event_data->bp_vaddr)
+    {
+        eprintf("int3_event: wrong rip: %"PRIx64" (bp: %"PRIx64")\n", event->x86_regs->rip, event_data->bp_vaddr);
+        event->interrupt_event.reinject = 1;
+        return VMI_EVENT_RESPONSE_NONE;
+    }
+
+    // this is our breakpoint
+    event->interrupt_event.reinject = 0;
+
+    printf("RIP: %"PRIx64 "\n", event->x86_regs->rip);
+    print_event(event);
+
+    // pause VM
+    status = vmi_pause_vm(vmi);
+    if (VMI_FAILURE == status)
+        eprintf("Fail to pause vm\n");
+
+    // stop listen
+    interrupted = true;
+    return VMI_EVENT_RESPONSE_NONE;
 }
 
 static void unregister_breakpoint(gpointer key, gpointer value, gpointer user_data)
