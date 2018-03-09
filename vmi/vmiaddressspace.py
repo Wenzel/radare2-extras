@@ -1,6 +1,7 @@
 from rekall import addrspace
 from libvmi import Libvmi
 
+URL_PREFIX = 'vmi://'
 
 class VMIAddressSpace(addrspace.BaseAddressSpace):
     """An address space which operates on top of Libvmi's interface."""
@@ -12,10 +13,15 @@ class VMIAddressSpace(addrspace.BaseAddressSpace):
 
     def __init__(self, base=None, filename=None, session=None, **kwargs):
         self.as_assert(base is None, "must be first Address Space")
-        self.as_assert(session is not None, "session must be passed")
+        self.session = session
 
-        domain = filename or (session and session.GetParameter("filename"))
-        self.as_assert(domain, "domain name missing")
+        url = filename or (session and session.GetParameter("filename"))
+        self.as_assert(url, "Filename must be specified in session (e.g. "
+                "session.SetParameter('filename', 'vmi://domain').")
+        self.as_assert(url.startswith(URL_PREFIX),
+                "The domain must be passed with the URL prefix {}".format(URL_PREFIX))
+        domain = url[len(URL_PREFIX):]
+        self.as_assert(domain, "domain name missing after {}".format(URL_PREFIX))
 
         super(VMIAddressSpace, self).__init__(base=base,session=session,**kwargs)
         self.vmi = Libvmi(domain, partial=True)
@@ -23,15 +29,18 @@ class VMIAddressSpace(addrspace.BaseAddressSpace):
     def close(self):
         self.vmi.destroy()
 
-    def read(self, offset, size):
-        buffer, bytes_read = self.vmi.read_pa(offset, size)
-        if size != bytes_read:
+    def read(self, addr, size):
+        buffer, bytes_read = self.vmi.read_pa(addr, size)
+        if bytes_read != size:
             raise RuntimeError('Error while reading physical memory at '
-                               '{}'.format(hex(offset)))
+                               '{}'.format(hex(addr)))
         return buffer
 
-    def write(self, offset, data):
-        self.vmi.write_pa(offset, data)
+    def write(self, addr, data):
+        bytes_written = self.vmi.write_pa(addr, data)
+        if bytes_written != len(data):
+            return False
+        return True
 
     def is_valid_address(self, addr):
         if addr == None:
