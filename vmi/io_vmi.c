@@ -47,13 +47,19 @@ static bool __plugin_open(RIO *io, const char *pathname, bool many) {
 }
 
 static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
-    printf("%s\n", __func__);
+    printf("%s flags = %d\n", __func__, flags);
+     r_sys_backtrace();
     RIODesc *ret = NULL;
     RIOVmi *rio_vmi = NULL;
     const char *delimiter = ":";
     long pid = 0;
     char *uri_content = NULL;
     char *saveptr = NULL;
+
+    if (flags & R_IO_WRITE)
+        printf("write enabled\n");
+    else
+        printf("write diabled\n");
 
     if (!__plugin_open(io, pathname, 0))
         return ret;
