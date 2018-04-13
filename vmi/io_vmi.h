@@ -9,6 +9,8 @@
 
 typedef struct {
     char *vm_name;
+    bool url_identify_by_name;
+    char* proc_name;
     int pid;
     uint64_t pid_cr3;
     int current_vcpu;

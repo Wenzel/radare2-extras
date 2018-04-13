@@ -78,27 +78,29 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
         goto out;
     }
     rio_vmi->vm_name = strdup(token);
-    // get pid
+    // get next token
     token = strtok_r(NULL, delimiter, &saveptr);
     if (!token)
     {
-        eprintf("strtok_r: Parsing pid failed\n");
+        eprintf("strtok_r: Parsing process identifier failed\n");
         goto out;
     }
+    rio_vmi->url_identify_by_name = false;
+    // try to parse it as pid
     saveptr = NULL;
     pid = strtol(token, &saveptr, 10);
     if (!pid)
     {
-        eprintf("strtol: Could not convert %s to int. (%s)\n", token, strerror(errno));
-        goto out;
+        // token must be interpreted as a process name
+        rio_vmi->url_identify_by_name = true;
+        rio_vmi->proc_name = strdup(token);
     }
-    if (*saveptr != '\0')
-    {
-        eprintf("strtol: Could not entirely convert %s to int, (%s)\n", token, saveptr);
-        goto out;
-    }
-    rio_vmi->pid = pid;
-    printf("VM: %s, PID: %d\n", rio_vmi->vm_name, rio_vmi->pid);
+    else
+        rio_vmi->pid = pid;
+    if (rio_vmi->url_identify_by_name)
+        printf("VM: %s, process name: %s\n", rio_vmi->vm_name, rio_vmi->proc_name);
+    else
+        printf("VM: %s, PID: %d\n", rio_vmi->vm_name, rio_vmi->pid);
 
     // init libvmi
     printf("Initializing LibVMI\n");

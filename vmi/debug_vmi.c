@@ -1,5 +1,6 @@
 #include <r_asm.h>
 #include <r_debug.h>
+#include <strings.h>
 
 #include "io_vmi.h"
 
@@ -29,6 +30,68 @@ static void print_event(vmi_event_t *event)
            event->mem_event.gla,
            event->vcpu_id
            );
+}
+
+static const char* dtb_to_pname(vmi_instance_t vmi, addr_t dtb) {
+    addr_t ps_head = 0;
+    addr_t flink = 0;
+    addr_t start_proc = 0;
+    addr_t pdb_offset = 0;
+    addr_t tasks_offset = 0;
+    addr_t name_offset = 0;
+    addr_t value = 0;
+    status_t status;
+
+
+    status = vmi_get_offset(vmi, "win_tasks", &tasks_offset);
+    if (VMI_FAILURE == status)
+    {
+        printf("failed\n");
+        return NULL;
+    }
+
+    status = vmi_get_offset(vmi, "win_pdbase", &pdb_offset);
+    if (VMI_FAILURE == status)
+    {
+        printf("failed\n");
+        return NULL;
+    }
+
+    status = vmi_get_offset(vmi, "win_pname", &name_offset);
+    if (VMI_FAILURE == status)
+    {
+        printf("failed\n");
+        return NULL;
+    }
+    status = vmi_translate_ksym2v(vmi, "PsActiveProcessHead", &ps_head);
+    if (VMI_FAILURE == status)
+    {
+        printf("failed\n");
+        return NULL;
+    }
+    status = vmi_read_addr_ksym(vmi, "PsActiveProcessHead", &flink);
+    if (VMI_FAILURE == status)
+    {
+        printf("failed\n");
+        return NULL;
+    }
+
+    while (flink != ps_head)
+    {
+        // get eprocess head
+        start_proc = flink - tasks_offset;
+
+        // get dtb value
+        vmi_read_addr_va(vmi, start_proc + pdb_offset, 0, &value);
+        if (value == dtb)
+        {
+            // read process name
+            return vmi_read_str_va(vmi, start_proc + name_offset, 0);
+        }
+        // read new flink
+        vmi_read_addr_va(vmi, flink, 0, &flink);
+    }
+    return NULL;
 }
 
 //
@@ -99,6 +162,8 @@ static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
 static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     RIOVmi *rio_vmi = NULL;
     pid_t pid = 0;
+    char* proc_name = NULL;
+    bool found = false;
 
     printf("%s\n", __func__);
 
@@ -110,6 +175,15 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     // get event data
     rio_vmi = (RIOVmi*) event->data;
 
+    // process name
+    proc_name = dtb_to_pname(vmi, event->reg_event.value);
+    if (!proc_name)
+    {
+        printf("can't find process\n");
+        interrupted = true;
+        return 0;
+    }
+
     status_t status = vmi_dtb_to_pid(vmi, (addr_t) event->reg_event.value, &pid);
     if (status == VMI_FAILURE)
     {
@@ -117,10 +191,27 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
         return 0;
     }
 
-    printf("Intercepted PID: %d, CR3: 0x%lx, RIP: 0x%lx\n", pid, event->reg_event.value, event->x86_regs->rip);
-    // check if it's our pid
-    if (pid == rio_vmi->pid)
+    printf("Intercepted PID: %d, CR3: 0x%lx, Name: %s, RIP: 0x%lx\n",
+           pid, event->reg_event.value, proc_name, event->x86_regs->rip);
+
+    if (rio_vmi->url_identify_by_name &&
+            !strncasecmp(proc_name, rio_vmi->proc_name, strlen(rio_vmi->proc_name)))
     {
+        found = true;
+        rio_vmi->pid = pid;
+    }
+    else if (!rio_vmi->url_identify_by_name && pid == rio_vmi->pid)
+    {
+        found = true;
+        rio_vmi->proc_name = strdup(proc_name);
+    }
+
+    if (found)
+    {
+        // delete old and maybe partial name for the full proc name
+        free(rio_vmi->proc_name);
+        rio_vmi->proc_name = strdup(proc_name);
+        printf("Found %s (%d)!\n", rio_vmi->proc_name, rio_vmi->pid);
         // stop monitoring
         interrupted = true;
         // pause the VM before we get out of main loop
@@ -135,6 +226,7 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
         // save new CR3 value
         rio_vmi->pid_cr3 = event->reg_event.value;
     }
+    free(proc_name);
 
     return 0;
 }
@@ -804,21 +896,21 @@ RDebugPlugin r_debug_plugin_vmi = {
     .arch = "x86",
     .bits = R_SYS_BITS_32 | R_SYS_BITS_64,
     .canstep = 1,
-    .step = &__step,
-    .cont = &__continue,
+    .info = &__info,
     .attach = &__attach,
     .detach = &__detach,
+    .select = &__select,
     .threads = &__threads,
+    .step = &__step,
+    .cont = &__continue,
     .wait = &__wait,
+    .kill = &__kill,
+    .frames = &__frames,
+    .reg_read = &__reg_read,
+    .reg_profile = (void*) &__reg_profile,
     .map_get = &__map_get,
     .modules_get = &__modules_get,
     .breakpoint = &__breakpoint,
-    .reg_profile = (void*) &__reg_profile,
-    .kill = &__kill,
-    .info = &__info,
-    .select = &__select,
-    .frames = &__frames,
-    .reg_read = &__reg_read,
 };
 
 #ifndef CORELIB
