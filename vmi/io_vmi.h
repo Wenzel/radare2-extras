@@ -6,6 +6,7 @@
 #include <libvmi/libvmi_extra.h>
 #include <libvmi/x86.h>
 #include <glib.h>
+#include "profile.h"
 
 typedef struct {
     char *vm_name;
@@ -20,6 +21,7 @@ typedef struct {
     // table [rip] -> [vmi_event_t]
     // event might be int3 or mem_event
     GHashTable *bp_events_table;
+    struct json_object *profile;
 } RIOVmi;
 
 #endif // IO_VMI_H

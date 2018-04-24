@@ -38,6 +38,8 @@ static void rio_vmi_destroy(RIOVmi *ptr)
         {
             g_hash_table_destroy(ptr->bp_events_table);
         }
+        if (ptr->profile)
+            json_object_put(ptr->profile);
         free(ptr);
     }
 }
@@ -54,6 +56,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     long pid = 0;
     char *uri_content = NULL;
     char *saveptr = NULL;
+    char *profile_path = NULL;
 
     if (!__plugin_open(io, pathname, 0))
         return ret;
@@ -112,6 +115,13 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
         eprintf("vmi_init_complete: Failed to initialize LibVMI, error: %d\n", error);
         goto out;
     }
+
+    // load Rekall JSON profile
+    profile_path = vmi_get_rekall_path(rio_vmi->vmi);
+    if (!profile_path)
+        goto out;
+    printf("Loading %s\n", profile_path);
+    rio_vmi->profile = json_object_from_file(profile_path);
     return r_io_desc_new (io, &r_io_plugin_vmi, pathname, flags | R_IO_WRITE, mode, rio_vmi);
 
 out:
