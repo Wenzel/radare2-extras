@@ -4,6 +4,8 @@
 
 #include "io_vmi.h"
 
+#define LINEAR48(x)    ((x) &= 0xffffffffffff)
+
 static RIOVmi *g_rio_vmi = NULL;
 
 // vmi_events_listen loop
@@ -32,7 +34,25 @@ static void print_event(vmi_event_t *event)
            );
 }
 
-static const char* dtb_to_pname(vmi_instance_t vmi, addr_t dtb) {
+// compare 2 virtual addresses
+static bool vaddr_equal(vmi_instance_t vmi, addr_t vaddr1, addr_t vaddr2)
+{
+    page_mode_t page_mode = vmi_get_page_mode(vmi, 0);
+
+    switch (page_mode) {
+    case VMI_PM_IA32E:
+        // only 48 bits are used by the MMU as linear address
+        if (LINEAR48(vaddr1) == LINEAR48(vaddr2))
+            return true;
+        break;
+    default:
+        eprintf("Unhandled page mode");
+        break;
+    }
+    return false;
+}
+
+static char* dtb_to_pname(vmi_instance_t vmi, addr_t dtb) {
     addr_t ps_head = 0;
     addr_t flink = 0;
     addr_t start_proc = 0;
@@ -115,9 +135,9 @@ static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
     pname = dtb_to_pname(vmi, event->x86_regs->cr3);
 
     // at the right rip ?
-    if (event->x86_regs->rip != event_data->bp_vaddr)
+    if (!vaddr_equal(vmi, event->x86_regs->rip, event_data->bp_vaddr))
     {
-        eprintf("mem_event: wrong rip: %"PRIx64" (bp: %"PRIx64")\n", event->x86_regs->rip, event_data->bp_vaddr);
+        eprintf("mem_event: wrong rip: %"PRIx64" (bp_vaddr: %"PRIx64")\n", event->x86_regs->rip, event_data->bp_vaddr);
         return VMI_EVENT_RESPONSE_EMULATE;
     }
 
@@ -128,7 +148,7 @@ static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
         return VMI_EVENT_RESPONSE_EMULATE;
     }
 
-    printf("RIP: %"PRIx64 "\n", event->x86_regs->rip);
+    printf("RIP: %"PRIx64 " (%s)\n", event->x86_regs->rip, pname);
     print_event(event);
 
     // pause VM
@@ -448,7 +468,6 @@ static RDebugReasonType __wait(RDebug *dbg, int pid) {
             eprintf("Fail to listen to events\n");
             return false;
         }
-        printf("Listening done\n");
     }
 
     // clear event if singlestep
@@ -605,7 +624,7 @@ static int __breakpoint (void *bp, RBreakpointItem *b, bool set) {
             if (b->hw)
             {
                 // need to translate the virtual address to physical
-                addr_t paddr = 0;
+                addr_t paddr;
                 status = vmi_translate_kv2p(g_rio_vmi->vmi, bp_vaddr, &paddr);
                 if (VMI_FAILURE == status)
                 {
