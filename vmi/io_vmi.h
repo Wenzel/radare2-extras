@@ -22,6 +22,9 @@ typedef struct {
     // event might be int3 or mem_event
     GHashTable *bp_events_table;
     struct json_object *profile;
+    // if we are attaching to a new process being created
+    // or if the process is already existing
+    bool attach_new_process;
 } RIOVmi;
 
 #endif // IO_VMI_H

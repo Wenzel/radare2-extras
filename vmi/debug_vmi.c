@@ -17,6 +17,12 @@ typedef struct
     addr_t bp_vaddr;
 } bp_event_data;
 
+typedef struct
+{
+    RIOVmi* rio_vmi;
+    addr_t bp_vaddr;
+} cont_until_event_data;
+
 //
 // helpers
 //
@@ -114,6 +120,136 @@ static char* dtb_to_pname(vmi_instance_t vmi, addr_t dtb) {
     return NULL;
 }
 
+static event_response_t cb_on_continue_until_event(vmi_instance_t vmi, vmi_event_t *event)
+{
+    RIOVmi* rio_vmi;
+    addr_t bp_vaddr;
+    status_t status;
+    cont_until_event_data event_data = {0};
+    const char *proc_name = NULL;
+
+    //printf("%s\n", __func__);
+
+    if(!event || event->type != VMI_EVENT_MEMORY || !event->data) {
+        eprintf("ERROR (%s): invalid event encounted\n", __func__);
+        return 0;
+    }
+
+    // get event data
+    event_data = *((cont_until_event_data*)event->data);
+    rio_vmi = event_data.rio_vmi;
+    bp_vaddr = event_data.bp_vaddr;
+
+    // our address ?
+    if (!vaddr_equal(vmi, event->x86_regs->rip, bp_vaddr))
+    {
+        // eprintf("Wrong RIP: 0x%lx\n", event->x86_regs->rip);
+        return VMI_EVENT_RESPONSE_EMULATE;
+    }
+
+    proc_name = dtb_to_pname(vmi, event->x86_regs->cr3);
+    if (!proc_name)
+        proc_name = "NEW_PROCESS.EXE";
+
+    printf("At NtResumeThread: %s, CR3: 0x%lx\n", proc_name, event->x86_regs->cr3);
+    status = vmi_pause_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to resume VM\n");
+        return false;
+    }
+
+    //interrupted = true;
+    return VMI_EVENT_RESPONSE_EMULATE;
+}
+
+static bool continue_until(RIOVmi *rio_vmi, addr_t addr)
+{
+    printf("%s\n", __func__);
+    status_t status;
+    addr_t paddr;
+    addr_t gfn;
+    vmi_event_t continue_until_event = {0};
+    cont_until_event_data event_data = {0};
+
+    event_data.rio_vmi = rio_vmi;
+    event_data.bp_vaddr = addr;
+    continue_until_event.data = &event_data;
+    // get paddr
+    status = vmi_translate_kv2p(rio_vmi->vmi, addr, &paddr);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to get paddr for 0x%lx\n", addr);
+        return false;
+    }
+    gfn = paddr >> 12;
+
+    SETUP_MEM_EVENT(&continue_until_event, gfn, VMI_MEMACCESS_X, cb_on_continue_until_event, 0);
+
+    status = vmi_register_event(rio_vmi->vmi, &continue_until_event);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("vmi event registration failure\n");
+        return false;
+    }
+
+    status = vmi_resume_vm(rio_vmi->vmi);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to resume VM\n");
+        return false;
+    }
+
+    interrupted = false;
+    while (!interrupted)
+    {
+        printf("Listening on VMI events...\n");
+        status = vmi_events_listen(rio_vmi->vmi, 1000);
+        if (status == VMI_FAILURE)
+        {
+            interrupted = true;
+            return false;
+        }
+    }
+
+    // unregister cr3 event
+    status = vmi_clear_event(rio_vmi->vmi, &continue_until_event, NULL);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Fail to clear event\n");
+        return false;
+    }
+    return true;
+}
+
+static bool attach_new_process(RDebug *dbg)
+{
+    RIODesc *desc = NULL;
+    RIOVmi *rio_vmi = NULL;
+    status_t status;
+    addr_t resume_thread_addr;
+
+    printf("%s\n", __func__);
+
+    desc = dbg->iob.io->desc;
+    rio_vmi = desc->data;
+
+    /*
+    // set a breakpoint at NtResumeThread
+    status = rekall_profile_symbol_to_rva(profile_path, "NtResumeThread", NULL,
+                                          &resume_thread_addr);
+    */
+    status = vmi_translate_ksym2v(rio_vmi->vmi, "NtResumeThread", &resume_thread_addr);
+    if (status == VMI_FAILURE)
+    {
+        eprintf("Unable to get symbol\n");
+        return false;
+    }
+    printf("NtResumeThread: 0x%lx\n", resume_thread_addr);
+    continue_until(rio_vmi, resume_thread_addr);
+    return true;
+}
+
 //
 // callbacks
 //
@@ -185,8 +321,9 @@ static event_response_t cb_on_sstep(vmi_instance_t vmi, vmi_event_t *event) {
 static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     RIOVmi *rio_vmi = NULL;
     pid_t pid = 0;
-    char* proc_name = NULL;
+    const char* proc_name = NULL;
     bool found = false;
+    status_t status;
 
     printf("%s\n", __func__);
 
@@ -202,12 +339,27 @@ static event_response_t cb_on_cr3_load(vmi_instance_t vmi, vmi_event_t *event){
     proc_name = dtb_to_pname(vmi, event->reg_event.value);
     if (!proc_name)
     {
-        printf("can't find process\n");
+        printf("CR3: 0x%lx can't find process\n", event->reg_event.value);
+        // stop monitoring
         interrupted = true;
+        // pause the VM before we get out of main loop
+        status = vmi_pause_vm(vmi);
+        if (status == VMI_FAILURE)
+        {
+            eprintf("Fail to pause VM\n");
+            return 0;
+        }
+        // if we can't find the process in the list
+        // it means we have intercepted a new CR3
+        rio_vmi->attach_new_process = true;
+        // set current VCPU
+        rio_vmi->current_vcpu = event->vcpu_id;
+        // save new CR3 value
+        rio_vmi->pid_cr3 = event->reg_event.value;
         return 0;
     }
 
-    status_t status = vmi_dtb_to_pid(vmi, (addr_t) event->reg_event.value, &pid);
+    status = vmi_dtb_to_pid(vmi, (addr_t) event->reg_event.value, &pid);
     if (status == VMI_FAILURE)
     {
         eprintf("ERROR (%s): fail to retrieve pid from cr3\n", __func__);
@@ -429,6 +581,16 @@ static int __attach(RDebug *dbg, int pid) {
 
     // set attached to allow reg_read
     rio_vmi->attached = true;
+
+    // did we attached to a new process ?
+    if (rio_vmi->attach_new_process)
+    {
+        return attach_new_process(dbg);
+    }
+    else
+    {
+        eprintf("Attaching to existing process is not implemented\n");
+    }
 
     return 0;
 }

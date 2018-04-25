@@ -56,7 +56,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
     long pid = 0;
     char *uri_content = NULL;
     char *saveptr = NULL;
-    char *profile_path = NULL;
+    const char *profile_path = NULL;
 
     if (!__plugin_open(io, pathname, 0))
         return ret;
@@ -68,6 +68,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int flags, int mode) {
 
     rio_vmi->current_vcpu = -1;
     rio_vmi->attached = false;
+    rio_vmi->attach_new_process = false;
     // init breakpoint ghastable
     rio_vmi->bp_events_table = g_hash_table_new(g_direct_hash, g_direct_equal);
     // URI has the following format: vmi://vm_name:pid
