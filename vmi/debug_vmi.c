@@ -100,6 +100,7 @@ static const char* dtb_to_pname(vmi_instance_t vmi, addr_t dtb) {
 static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
     status_t status;
     bp_event_data *event_data;
+    const char *pname = NULL;
 
     printf("%s\n", __func__);
 
@@ -111,17 +112,19 @@ static event_response_t cb_on_mem_event(vmi_instance_t vmi, vmi_event_t *event){
     // get event_data
     event_data = (bp_event_data*) event->data;
 
-    // our pid ?
-    if (event->x86_regs->cr3 != event_data->pid_cr3)
-    {
-        eprintf("mem_event: wrong cr3\n");
-        return VMI_EVENT_RESPONSE_EMULATE;
-    }
+    pname = dtb_to_pname(vmi, event->x86_regs->cr3);
 
     // at the right rip ?
     if (event->x86_regs->rip != event_data->bp_vaddr)
     {
         eprintf("mem_event: wrong rip: %"PRIx64" (bp: %"PRIx64")\n", event->x86_regs->rip, event_data->bp_vaddr);
+        return VMI_EVENT_RESPONSE_EMULATE;
+    }
+
+    // our pid ?
+    if (event->x86_regs->cr3 != event_data->pid_cr3)
+    {
+        eprintf("mem_event: wrong cr3 (%s)\n", pname);
         return VMI_EVENT_RESPONSE_EMULATE;
     }
 
